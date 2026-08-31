@@ -443,6 +443,7 @@ function stepLetters(dt,t){
   stomachLoad+=((piled/480)-stomachLoad)*Math.min(1,dt*1.6);   // 55자 넘게 쌓이면 소화불량
   if(stomachLoad>1 && performance.now()>refluxUntil+4000){
     refluxUntil=performance.now()+REFLUX_MS;                 // 관이 뒤집힌다 (과정이 보이게 길게)
+    sndPurge();                                              // 소화불량의 역류도 소리를 낸다
     purge=Math.max(purge,0.85);
     for(const L of letters){                            // 쌓인 것이 한꺼번에 치민다
       const [,qy]=toBody(L.x,L.y);
@@ -494,11 +495,19 @@ function drawEvidence(now){
   E.clearRect(0,0,W(),H());
   E.drawImage(glsC,0,0);                 // 유리에 흘러내린 것 — 시 위를 지나간다
   // 폭도 함께 본다 — 세로로 긴 화면에서 시가 넘치지 않게
-  const h=H(), fs=Math.round(Math.min(h*0.0182, W()*0.0125)), lh=fs*1.82, gap=lh*0.85;
-  E.font=F_KO.replace('600','500').replace('%',fs);E.textAlign='left';E.textBaseline='alphabetic';
-  E.fillStyle='rgba(226,218,204,0.58)';
+  const h=H(), fs=Math.round(Math.min(h*0.0198, W()*0.0136)), lh=fs*1.78, gap=lh*0.80;
+  E.textAlign='left';E.textBaseline='alphabetic';
   const x=W()*0.052;
-  let y=h*0.105;
+  let y=h*0.092;
+  // 제목 — 시와 작품이 같은 이름을 쓴다: 「구토」 (9/1 확정)
+  const tfs=Math.round(fs*1.42);
+  E.font=F_KO.replace('600','700').replace('%',tfs);
+  E.fillStyle='rgba(238,230,216,0.92)';
+  let tx=x;
+  for(const ch of '구토'){E.fillText(ch,tx,y);tx+=tfs*1.55;}   // 자간은 손으로 (letterSpacing 미지원 대비)
+  y+=lh*2.0;
+  E.font=F_KO.replace('600','500').replace('%',fs);
+  E.fillStyle='rgba(230,222,208,0.80)';
   for(const st of POEM){
     for(const l of st){E.fillText(l,x,y);y+=lh;}
     y+=gap;
@@ -627,51 +636,98 @@ const wordTex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,wordTex);
  [gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR]]
  .forEach(([k,v])=>gl.texParameteri(gl.TEXTURE_2D,k,v));
 
-// ── 사운드: 유리의 몸 (부드러운 톤 — 유리 미학에 맞춤) ──
-let AC=null,master=null,audioOn=false,droneG=null;
-function initAudio(){return; // 무음 확정 (8/31) — 병든 몸은 소리내지 않는다. 아래는 보존.
-if(audioOn)return;try{
-  AC=new (window.AudioContext||window.webkitAudioContext)();
-  master=AC.createGain();master.gain.value=0.4;master.connect(AC.destination);
-  // 낮은 드론 — 몸이 살아있다는 바탕
-  const o1=AC.createOscillator(),o2=AC.createOscillator(),f=AC.createBiquadFilter();
-  droneG=AC.createGain();droneG.gain.value=0.05;
-  o1.type='sine';o1.frequency.value=41.2;o2.type='sine';o2.frequency.value=62.0;
-  f.type='lowpass';f.frequency.value=320;
-  o1.connect(f);o2.connect(f);f.connect(droneG);droneG.connect(master);
-  o1.start();o2.start();
-  audioOn=true;if(AC.resume)AC.resume();
-}catch(e){console.error('audio',e);}}
-function tone(fr,dur,v,type){if(!audioOn)return;const t0=AC.currentTime;
+// ── 사운드: 앓는 몸 ──
+// 유리의 사인톤(구 버전)을 버린다 — 지금 이것은 살이다. 숨, 창자의 웅얼거림,
+// 삼킴의 둔탁함, 게움의 발작. 전부 절차 합성, 파일 없음.
+// 볼륨은 ?vol= (0=무음 · 1=병실 기본). 첫 터치에서 깨어난다(브라우저 정책).
+const VOL=parseFloat(new URLSearchParams(location.search).get('vol')??'1');
+const MASTER_V=0.16*VOL;
+let AC=null,master=null,audioOn=false;
+let breathG=null,gutG=null,gutF=null,lastSw=0;
+function noiseBuf(sec,brown){
+  const b=AC.createBuffer(1,AC.sampleRate*sec,AC.sampleRate),d=b.getChannelData(0);
+  let last=0;
+  for(let i=0;i<d.length;i++){
+    const w=Math.random()*2-1;
+    if(brown){ last=(last+0.02*w)/1.02; d[i]=last*3.5; } else d[i]=w;
+  }
+  return b;
+}
+function initAudio(){
+  if(audioOn||VOL<=0)return;
+  try{
+    AC=new (window.AudioContext||window.webkitAudioContext)();
+    master=AC.createGain();master.gain.value=MASTER_V;master.connect(AC.destination);
+    // 숨 — 낮은 두 사인이 몸통. 진폭은 loop()가 breath로 몬다(병들수록 얕고 빠르다).
+    const o1=AC.createOscillator(),o2=AC.createOscillator(),o2g=AC.createGain();
+    o1.type='sine';o1.frequency.value=38;o2.type='sine';o2.frequency.value=57.1;
+    o2g.gain.value=0.4;
+    breathG=AC.createGain();breathG.gain.value=0;
+    o1.connect(breathG);o2.connect(o2g);o2g.connect(breathG);breathG.connect(master);
+    // 창자 — 갈색 소음이 낮게 구르며 연동과 함께 웅얼거린다
+    const gut=AC.createBufferSource();gut.buffer=noiseBuf(7,true);gut.loop=true;
+    gutF=AC.createBiquadFilter();gutF.type='lowpass';gutF.frequency.value=90;gutF.Q.value=0.8;
+    gutG=AC.createGain();gutG.gain.value=0;
+    gut.connect(gutF);gutF.connect(gutG);gutG.connect(master);
+    o1.start();o2.start();gut.start();
+    audioOn=true;if(AC.resume)AC.resume();
+  }catch(e){console.error('audio',e);}
+}
+// 매 프레임 — 몸의 상태가 곧 소리의 상태
+function audioFrame(t){
+  if(!audioOn)return;
+  breathG.gain.value=(0.05+0.17*breath)*(1-dayT*0.35)+purge*0.10;
+  gutG.gain.value=Math.max(0,0.05+0.05*Math.sin(t*1.1)+0.04*Math.sin(t*0.37+1.7)+toxin*0.05+purge*0.24);
+  gutF.frequency.value=80+30*Math.sin(t*0.23)+purge*260+dayT*24;
+}
+// 삼킴 — 목을 타고 내려가는 둔탁한 하강. 쏟아질 땐 겹치지 않게 숨을 고른다.
+function sndSwallow(){
+  if(!audioOn)return;const t0=AC.currentTime;
+  if(t0-lastSw<0.32)return; lastSw=t0;
   const o=AC.createOscillator(),g=AC.createGain(),f=AC.createBiquadFilter();
-  o.type=type||'sine';o.frequency.setValueAtTime(fr,t0);
-  f.type='lowpass';f.frequency.value=2400;
-  g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(v,t0+0.02);
-  g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
-  o.connect(f);f.connect(g);g.connect(master);o.start(t0);o.stop(t0+dur+0.05);}
-function sndRead(){tone(880+Math.random()*220,0.5,0.10,'sine');}       // 유리에 닿는 소리
-function sndSwallow(){if(!audioOn)return;const t0=AC.currentTime;      // 하강: 삼켜진다
-  const o=AC.createOscillator(),g=AC.createGain(),f=AC.createBiquadFilter();
-  o.type='sine';o.frequency.setValueAtTime(420,t0);o.frequency.exponentialRampToValueAtTime(88,t0+0.55);
-  f.type='lowpass';f.frequency.value=1200;
-  g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(0.28,t0+0.03);
-  g.gain.exponentialRampToValueAtTime(0.0001,t0+0.7);
-  o.connect(f);f.connect(g);g.connect(master);o.start(t0);o.stop(t0+0.8);}
-function sndPurge(big){if(!audioOn)return;const t0=AC.currentTime;
-  const n=AC.createBufferSource(),nb=AC.createBuffer(1,AC.sampleRate*0.9,AC.sampleRate);
-  const d=nb.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=(Math.random()*2-1)*(1-i/d.length);
-  n.buffer=nb;
-  const f=AC.createBiquadFilter();f.type='bandpass';f.Q.value=1.2;
-  f.frequency.setValueAtTime(160,t0);f.frequency.exponentialRampToValueAtTime(big?2200:800,t0+0.6);
-  const g=AC.createGain();g.gain.setValueAtTime(0.0001,t0);
-  g.gain.linearRampToValueAtTime(big?0.85:0.4,t0+0.05);
-  g.gain.exponentialRampToValueAtTime(0.0001,t0+(big?0.95:0.5));
-  n.connect(f);f.connect(g);g.connect(master);n.start(t0);n.stop(t0+1.0);
-  const o=AC.createOscillator(),gg=AC.createGain();o.type='sine';
-  o.frequency.setValueAtTime(110,t0);o.frequency.exponentialRampToValueAtTime(26,t0+0.7);
-  gg.gain.setValueAtTime(0.0001,t0);gg.gain.linearRampToValueAtTime(big?0.7:0.32,t0+0.04);
-  gg.gain.exponentialRampToValueAtTime(0.0001,t0+0.9);
-  o.connect(gg);gg.connect(master);o.start(t0);o.stop(t0+1.0);}
+  o.type='sine';o.frequency.setValueAtTime(150+Math.random()*40,t0);
+  o.frequency.exponentialRampToValueAtTime(46,t0+0.42);
+  f.type='lowpass';f.frequency.value=300;
+  g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(0.36,t0+0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001,t0+0.55);
+  o.connect(f);f.connect(g);g.connect(master);o.start(t0);o.stop(t0+0.6);
+}
+// 구역 — 두 번의 짧은 수축. 올라오다 만다.
+function sndGag(){
+  if(!audioOn)return;const t0=AC.currentTime;
+  for(const dt of [0,0.19]){
+    const n=AC.createBufferSource();n.buffer=noiseBuf(0.25,true);
+    const f=AC.createBiquadFilter();f.type='bandpass';f.Q.value=1.4;f.frequency.value=210;
+    const g=AC.createGain();
+    g.gain.setValueAtTime(0.0001,t0+dt);g.gain.exponentialRampToValueAtTime(0.30,t0+dt+0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001,t0+dt+0.16);
+    n.connect(f);f.connect(g);g.connect(master);n.start(t0+dt);n.stop(t0+dt+0.25);
+  }
+}
+// 게움 — 역류(REFLUX_MS)와 같은 2.8초. 치밀어오름 → 바닥이 꺼지는 서브 → 숨죽임.
+function sndPurge(){
+  if(!audioOn)return;const t0=AC.currentTime;
+  const n=AC.createBufferSource();n.buffer=noiseBuf(3,true);
+  const f=AC.createBiquadFilter();f.type='bandpass';f.Q.value=0.9;
+  f.frequency.setValueAtTime(70,t0);f.frequency.exponentialRampToValueAtTime(640,t0+1.9);
+  const g=AC.createGain();
+  g.gain.setValueAtTime(0.0001,t0);
+  g.gain.exponentialRampToValueAtTime(0.5,t0+1.6);
+  g.gain.setValueAtTime(0.5,t0+1.9);
+  g.gain.exponentialRampToValueAtTime(0.0001,t0+2.7);
+  n.connect(f);f.connect(g);g.connect(master);n.start(t0);n.stop(t0+2.8);
+  const o=AC.createOscillator(),gg=AC.createGain();
+  o.type='sine';o.frequency.setValueAtTime(95,t0+0.8);o.frequency.exponentialRampToValueAtTime(22,t0+2.2);
+  gg.gain.setValueAtTime(0.0001,t0+0.8);gg.gain.linearRampToValueAtTime(0.5,t0+1.0);
+  gg.gain.exponentialRampToValueAtTime(0.0001,t0+2.6);
+  o.connect(gg);gg.connect(master);o.start(t0+0.8);o.stop(t0+2.7);
+  // 게운 뒤의 숨죽임 — 방이 3초 조용해졌다가 천천히 돌아온다
+  master.gain.cancelScheduledValues(t0);
+  master.gain.setValueAtTime(MASTER_V,t0);
+  master.gain.setValueAtTime(MASTER_V,t0+2.6);
+  master.gain.linearRampToValueAtTime(MASTER_V*0.25,t0+3.0);
+  master.gain.linearRampToValueAtTime(MASTER_V,t0+6.5);
+}
 
 // ── 엔진 이벤트 → 유리 ──
 function onReading(m){
@@ -684,7 +740,7 @@ function onReading(m){
     // 세상의 말이 관으로 들어간다 — 단어 단위로 내려간다
     swallowText(txt,7);   // 문장 통째로 삼킨다 — 역겨움은 문장에 있다
   }
-  sndRead();
+  sndSwallow();
 }
 function onVerdict(m){
   toxT=Math.min(1,(m.toxin||0)/7);
@@ -697,11 +753,11 @@ function onVerdict(m){
               smallT=`살이 된 말 · 영양+${n}`; }
     else { koT=''; smallT=`삼켜 내려감 · 영양${n>=0?'+':''}${n}`; }
   }else if(m.v==='GAG'){
-    sndPurge(false);
+    sndGag();
     purge=Math.max(purge,0.5); koT='';   // 삼키다 만 것 — 살이 되지 못한다
     smallT=`삼키다 만 것, ${sub}`;
   }else if(m.v==='PURGE'){
-    sndPurge(true);
+    sndPurge();
     purge=1.0; toxT=1.0; koT=''; think='';
     refluxUntil=performance.now()+REFLUX_MS;   // 관이 역류한다
     // 게워지는 말이 거꾸로 올라온다
@@ -714,7 +770,7 @@ function onVerdict(m){
 }
 function onGulp(m){
   swallowText(m.text,3);
-  smallT=`씹지 않고, ${sub}`; sndRead(); }
+  smallT=`씹지 않고, ${sub}`; sndSwallow(); }
 
 // ── 루프 ──
 let last=0,started=0;
@@ -731,7 +787,7 @@ function loop(now){
   fatigue=dayT;
   breath=Math.sin((now-started)/1000*(0.55+dayT*0.22))*0.5+0.5;
   canalDir=(now<refluxUntil)?-1:1;   // 게움 동안 관이 역류한다
-  if(droneG)droneG.gain.value=0.035+toxin*0.05+purge*0.05;
+  audioFrame((now-started)/1000);
   drawType(dt);
   drawEvidence(now);
   gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,wordTex);
