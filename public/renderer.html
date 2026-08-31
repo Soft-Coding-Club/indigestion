@@ -993,9 +993,9 @@ function sndSwallow(text){
 function chokeNoise(t,dur,v){
   // 조임 — 어두운 협대역이 불규칙한 계단으로 차오르다 뚝 끊긴다
   const n=AC.createBufferSource();n.buffer=noiseBuf(dur+0.1,false);
-  const bp=AC.createBiquadFilter();bp.type='bandpass';bp.Q.value=6;
-  bp.frequency.setValueAtTime(230,t);
-  bp.frequency.exponentialRampToValueAtTime(540,t+dur);
+  const bp=AC.createBiquadFilter();bp.type='bandpass';bp.Q.value=3.5;   // 좁으면 휘파람이 된다
+  bp.frequency.setValueAtTime(210,t);
+  bp.frequency.exponentialRampToValueAtTime(400,t+dur);
   const g=AC.createGain();g.gain.value=0;
   let gt=t;
   while(gt<t+dur){
@@ -1003,8 +1003,8 @@ function chokeNoise(t,dur,v){
     g.gain.setValueAtTime(Math.pow(e,1.6)*(0.55+Math.random()*0.45)*v,gt);   // 경련의 계단
     gt+=0.03+Math.random()*0.045;
   }
-  g.gain.setValueAtTime(0.0001,t+dur);
-  n.connect(bp);bp.connect(g);g.connect(pBus);n.start(t);n.stop(t+dur+0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur+0.035);   // 뚝 끊되 클릭은 없이
+  n.connect(bp);bp.connect(g);g.connect(pBus);n.start(t);n.stop(t+dur+0.09);
 }
 function retchV(t,v){
   // 수축 — 조였다 무너진다. 목소리 없이.
@@ -1072,16 +1072,27 @@ function sndPurge(){
   sg.gain.setValueAtTime(0.0001,tB);sg.gain.linearRampToValueAtTime(0.45,tB+0.05);
   sg.gain.exponentialRampToValueAtTime(0.0001,tB+0.6);
   so.connect(sg);sg.connect(pBus);so.start(tB);so.stop(tB+0.65);
-  // 뒤늦은 방울 둘
+  // 뒤늦은 잔방울 — 상승 처프는 만화가 된다. 젖은 플립(협대역 노이즈 낱알)으로.
   for(let k=0;k<2;k++){
-    const tt=tB+0.62+k*0.28+Math.random()*0.14;
-    const ob=AC.createOscillator(),gb=AC.createGain();
-    const f0=300+Math.random()*180;
-    ob.type='sine';ob.frequency.setValueAtTime(f0,tt);ob.frequency.exponentialRampToValueAtTime(f0*1.3,tt+0.05);
-    gb.gain.setValueAtTime(0.0001,tt);gb.gain.exponentialRampToValueAtTime(0.04,tt+0.008);
-    gb.gain.exponentialRampToValueAtTime(0.0001,tt+0.06);
-    ob.connect(gb);gb.connect(pBus);ob.start(tt);ob.stop(tt+0.08);
+    const tt=tB+0.62+k*0.30+Math.random()*0.16;
+    const c=AC.createBufferSource();c.buffer=noiseBuf(0.05,true);
+    const cb=AC.createBiquadFilter();cb.type='bandpass';cb.Q.value=4;
+    cb.frequency.value=520+Math.random()*380;
+    const cg=AC.createGain();cg.gain.setValueAtTime(0.05,tt);
+    cg.gain.exponentialRampToValueAtTime(0.0001,tt+0.05);
+    c.connect(cb);cb.connect(cg);cg.connect(pBus);c.start(tt);c.stop(tt+0.06);
   }
+  // 웅덩이가 가라앉는다 — 게운 뒤 액체가 자리를 찾는 소리
+  const st=AC.createBufferSource();st.buffer=noiseBuf(1.0,true);
+  const sf=AC.createBiquadFilter();sf.type='lowpass';sf.frequency.value=320;
+  const stg=AC.createGain();stg.gain.value=0;
+  let qt=tB+0.45;
+  while(qt<tB+1.3){
+    stg.gain.setValueAtTime((0.10+Math.random()*0.06)*Math.max(0,1-(qt-tB-0.45)/0.85),qt);
+    qt+=0.05+Math.random()*0.07;
+  }
+  stg.gain.setValueAtTime(0.0001,tB+1.32);
+  st.connect(sf);sf.connect(stg);stg.connect(pBus);st.start(tB+0.45);st.stop(tB+1.38);
   // ── ⑤ 숨죽임 — 들숨(사람의 표지)은 없다. 방이 조용해질 뿐. ──
   const tG=tB+0.62;
   master.gain.cancelScheduledValues(t0);
