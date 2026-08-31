@@ -353,6 +353,7 @@ function stepLetters(dt,t){
       const [sx,sy]=toScreen(qx-nx/len*push, qy-ny/len*push);
       L.x=sx; L.y=sy;
       const vn=(L.vx*nx/len+L.vy*ny/len);
+      sndClick(Math.abs(vn)/H(),L.size);              // 부딪히는 순간이 곧 소리 (v2)
       L.vx-=1.5*vn*nx/len; L.vy-=1.5*vn*ny/len;      // 반발
       L.vx*=0.72; L.vy*=0.72;                         // 젖은 벽이라 잘 안 튄다
       L.vr+=(Math.random()-0.5)*2.0;
@@ -641,9 +642,11 @@ const wordTex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,wordTex);
 // 삼킴의 둔탁함, 게움의 발작. 전부 절차 합성, 파일 없음.
 // 볼륨은 ?vol= (0=무음 · 1=병실 기본). 첫 터치에서 깨어난다(브라우저 정책).
 const VOL=parseFloat(new URLSearchParams(location.search).get('vol')??'1');
+// 삼킴 소리 버전: 1=속삭임 포먼트(말의 목소리) · 2=활자 충돌(글자의 물질성)
+const SND=parseInt(new URLSearchParams(location.search).get('snd')??'1');
 const MASTER_V=0.16*VOL;
 let AC=null,master=null,audioOn=false;
-let breathG=null,gutG=null,gutF=null,lastSw=0;
+let breathG=null,gutG=null,gutF=null,lastSw=0,lastClick=0,clickBuf=null;
 function noiseBuf(sec,brown){
   const b=AC.createBuffer(1,AC.sampleRate*sec,AC.sampleRate),d=b.getChannelData(0);
   let last=0;
@@ -692,10 +695,39 @@ function gulpThump(v){
   g.gain.exponentialRampToValueAtTime(0.0001,t0+0.30);
   o.connect(g);g.connect(master);o.start(t0);o.stop(t0+0.35);
 }
+// v2 — 글자가 위벽에 닿는 소리. 시뮬레이션의 실제 충돌(속도·크기)이 그대로 소리가 된다.
+// 큰 글자는 낮게, 세게 부딪히면 크게. 활자를 쏟아붓는 마른 딸깍임.
+function sndClick(imp,size){
+  if(!audioOn||SND!==2)return;
+  // 쉬는 접촉(벽에 기대 있음, imp~0.001, 초당 수천 번)은 소리가 없다 — 부딪힘만 말한다
+  if(imp<0.07)return;
+  const t0=AC.currentTime;
+  if(t0-lastClick<0.030)return; lastClick=t0;
+  if(!clickBuf)clickBuf=noiseBuf(0.08,false);
+  const n=AC.createBufferSource();n.buffer=clickBuf;
+  n.playbackRate.value=1.4+Math.random()*1.3;
+  const bp=AC.createBiquadFilter();bp.type='bandpass';bp.Q.value=9;
+  const base=3400-Math.min(1,size/(H()*0.05))*2200;      // 큰 글자 = 낮은 딸깍
+  bp.frequency.value=base*(0.9+Math.random()*0.2);
+  const g=AC.createGain();
+  const v=Math.min(0.42,0.10+0.34*Math.min(1,(imp-0.07)*1.1));   // 세게 부딪힐수록 크게
+  g.gain.setValueAtTime(v,t0);
+  g.gain.exponentialRampToValueAtTime(0.0001,t0+0.045+Math.random()*0.030);
+  n.connect(bp);bp.connect(g);g.connect(master);
+  n.start(t0);n.stop(t0+0.09);
+  // 세게 부딪힌 것은 살이 함께 울린다 — 낮은 노크
+  if(imp>0.55){
+    const o=AC.createOscillator(),g2=AC.createGain();
+    o.type='sine';o.frequency.setValueAtTime(150-Math.min(1,size/(H()*0.05))*70,t0);
+    g2.gain.setValueAtTime(0.14,t0);g2.gain.exponentialRampToValueAtTime(0.0001,t0+0.07);
+    o.connect(g2);g2.connect(master);o.start(t0);o.stop(t0+0.08);
+  }
+}
 function sndSwallow(text){
   if(!audioOn)return;
   const t0=AC.currentTime;
   if(t0-lastSw<0.15)return; lastSw=t0;
+  if(SND===2){ gulpThump(0.10); return; }            // v2: 입은 조용하다 — 충돌이 말한다
   if(whispers>=2){ gulpThump(0.16); return; }        // 쏟아질 땐 목넘김만 — "고를 새도 없이"
   if(!whisperBuf)whisperBuf=noiseBuf(1.5,false);
   const words=String(text||'').toLowerCase().split(/[^a-z]+/).filter(w=>w).slice(0,7);
