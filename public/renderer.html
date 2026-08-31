@@ -652,7 +652,7 @@ const wordTex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,wordTex);
 // 볼륨은 ?vol= (0=무음 · 1=병실 기본). 첫 터치에서 깨어난다(브라우저 정책).
 const VOL=parseFloat(new URLSearchParams(location.search).get('vol')??'1');
 // 삼킴 소리 버전 — 숫자키 1~9로 라이브 전환 (?snd=N이 초기값. 전시엔 키보드 없음)
-let SND=parseInt(new URLSearchParams(location.search).get('snd')??'1');
+let SND=parseInt(new URLSearchParams(location.search).get('snd')??'3');   // 기본 = 꿀꺽 (9/1 확정)
 const SND_NAMES={1:'속삭임 — 말의 목소리',2:'활자 충돌 — 물질',3:'꿀꺽 — 젖은 몸',
   4:'거꾸로 말 — 삼켜지는 언어',5:'수화기 — 먼 목소리',6:'타자 — 자판',
   7:'구겨짐 — 종이',8:'몸북 — 둔기',9:'모래 — 낱알'};
@@ -736,25 +736,36 @@ function sndClick(imp,size){
     o.connect(g2);g2.connect(master);o.start(t0);o.stop(t0+0.08);
   }
 }
-// ── v3 꿀꺽: 젖은 몸. 공진 저역이 꾸르륵 내려가고, 물기 있는 스미어가 깔린다. ──
+// ── v3 꿀꺽: 젖은 몸. 물방울 공명이 차례로 내려가고, 끝에 목이 닫힌다.
+// 각 방울은 기포 물리 그대로 — 닫히며 음이 위로 챙 하고 올라간다(그래서 젖은 채로 또렷하다).
+// v1 초안의 탁함(전부 500Hz 아래: 공진 저역+갈색 스미어)을 걷어냈다.
 function swV3(text){
   const t0=AC.currentTime, n=Math.min(4,2+((text||'').length/60|0));
   for(let k=0;k<n;k++){
-    const t=t0+k*(0.11+Math.random()*0.05);
-    const o=AC.createOscillator(),g=AC.createGain(),lp=AC.createBiquadFilter();
-    o.type='sine';o.frequency.setValueAtTime(210-k*28,t);
-    o.frequency.exponentialRampToValueAtTime(64-k*6,t+0.10);
-    lp.type='lowpass';lp.frequency.value=420;lp.Q.value=9;         // 공진 = 물칸
-    g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(0.075,t+0.018);
-    g.gain.exponentialRampToValueAtTime(0.0001,t+0.11);
-    o.connect(lp);lp.connect(g);g.connect(master);o.start(t);o.stop(t+0.13);
+    const t=t0+k*(0.105+Math.random()*0.045);
+    const f0=(520-k*95)*(0.92+Math.random()*0.16);          // 방울이 차례로 낮아진다 = 내려간다
+    const o=AC.createOscillator(),g=AC.createGain();
+    o.type='sine';
+    o.frequency.setValueAtTime(f0,t);
+    o.frequency.exponentialRampToValueAtTime(f0*1.38,t+0.07); // 기포가 닫히는 상승 처프
+    g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(0.11,t+0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.075);
+    o.connect(g);g.connect(master);o.start(t);o.stop(t+0.09);
+    // 혀끝 틱 — 방울의 시작을 또렷하게 발음한다
+    const c=AC.createBufferSource();c.buffer=clickBuf||(clickBuf=noiseBuf(0.08,false));
+    c.playbackRate.value=2.2;
+    const bp=AC.createBiquadFilter();bp.type='bandpass';bp.Q.value=3;bp.frequency.value=1900;
+    const g2=AC.createGain();g2.gain.setValueAtTime(0.035,t);
+    g2.gain.exponentialRampToValueAtTime(0.0001,t+0.012);
+    c.connect(bp);bp.connect(g2);g2.connect(master);c.start(t);c.stop(t+0.02);
   }
-  const w=AC.createBufferSource();w.buffer=noiseBuf(0.5,true);
-  const f=AC.createBiquadFilter();f.type='lowpass';f.frequency.value=500;
-  const g=AC.createGain();g.gain.setValueAtTime(0.0001,t0);
-  g.gain.exponentialRampToValueAtTime(0.065,t0+0.06);
-  g.gain.exponentialRampToValueAtTime(0.0001,t0+0.42);
-  w.connect(f);f.connect(g);g.connect(master);w.start(t0);w.stop(t0+0.5);
+  // 목이 닫힌다 — 짧은 저역 한 번 (긴 스미어는 탁해서 폐기)
+  const tE=t0+n*0.11+0.02;
+  const o=AC.createOscillator(),g=AC.createGain();
+  o.type='sine';o.frequency.setValueAtTime(160,tE);o.frequency.exponentialRampToValueAtTime(72,tE+0.11);
+  g.gain.setValueAtTime(0.0001,tE);g.gain.exponentialRampToValueAtTime(0.15,tE+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001,tE+0.13);
+  o.connect(g);g.connect(master);o.start(tE);o.stop(tE+0.15);
 }
 // ── v4 거꾸로 말: 포먼트가 역방향 — 느리게 차오르다 뚝 끊기고, 낱말 순서도 거꾸로. 들이켜지는 언어. ──
 function swV4(text){
