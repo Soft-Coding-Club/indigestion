@@ -513,6 +513,15 @@ function drawEvidence(now){
     for(const l of st){E.fillText(l,x,y);y+=lh;}
     y+=gap;
   }
+  // 버전 전환 직후 2.6초만 — 어떤 소리를 듣는 중인지
+  const la=performance.now()-sndLabelAt;
+  if(sndLabelAt&&la<2600){
+    E.font=F_MONO.replace('%',Math.round(h*0.014));
+    E.textAlign='right';
+    E.fillStyle=`rgba(160,150,135,${(0.8*(1-la/2600)).toFixed(2)})`;
+    E.fillText(`소리 ${SND} — ${SND_NAMES[SND]}`,W()-h*0.03,h*0.97);
+    E.textAlign='left';
+  }
 }
 
 // ── WebGL: 유동하는 유리 ──
@@ -642,8 +651,12 @@ const wordTex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,wordTex);
 // 삼킴의 둔탁함, 게움의 발작. 전부 절차 합성, 파일 없음.
 // 볼륨은 ?vol= (0=무음 · 1=병실 기본). 첫 터치에서 깨어난다(브라우저 정책).
 const VOL=parseFloat(new URLSearchParams(location.search).get('vol')??'1');
-// 삼킴 소리 버전: 1=속삭임 포먼트(말의 목소리) · 2=활자 충돌(글자의 물질성)
-const SND=parseInt(new URLSearchParams(location.search).get('snd')??'1');
+// 삼킴 소리 버전 — 숫자키 1~9로 라이브 전환 (?snd=N이 초기값. 전시엔 키보드 없음)
+let SND=parseInt(new URLSearchParams(location.search).get('snd')??'1');
+const SND_NAMES={1:'속삭임 — 말의 목소리',2:'활자 충돌 — 물질',3:'꿀꺽 — 젖은 몸',
+  4:'거꾸로 말 — 삼켜지는 언어',5:'수화기 — 먼 목소리',6:'타자 — 자판',
+  7:'구겨짐 — 종이',8:'몸북 — 둔기',9:'모래 — 낱알'};
+let sndLabelAt=0;
 const MASTER_V=0.16*VOL;
 let AC=null,master=null,audioOn=false;
 let breathG=null,gutG=null,gutF=null,lastSw=0,lastClick=0,clickBuf=null;
@@ -723,11 +736,191 @@ function sndClick(imp,size){
     o.connect(g2);g2.connect(master);o.start(t0);o.stop(t0+0.08);
   }
 }
+// ── v3 꿀꺽: 젖은 몸. 공진 저역이 꾸르륵 내려가고, 물기 있는 스미어가 깔린다. ──
+function swV3(text){
+  const t0=AC.currentTime, n=Math.min(4,2+((text||'').length/60|0));
+  for(let k=0;k<n;k++){
+    const t=t0+k*(0.11+Math.random()*0.05);
+    const o=AC.createOscillator(),g=AC.createGain(),lp=AC.createBiquadFilter();
+    o.type='sine';o.frequency.setValueAtTime(210-k*28,t);
+    o.frequency.exponentialRampToValueAtTime(64-k*6,t+0.10);
+    lp.type='lowpass';lp.frequency.value=420;lp.Q.value=9;         // 공진 = 물칸
+    g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(0.075,t+0.018);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.11);
+    o.connect(lp);lp.connect(g);g.connect(master);o.start(t);o.stop(t+0.13);
+  }
+  const w=AC.createBufferSource();w.buffer=noiseBuf(0.5,true);
+  const f=AC.createBiquadFilter();f.type='lowpass';f.frequency.value=500;
+  const g=AC.createGain();g.gain.setValueAtTime(0.0001,t0);
+  g.gain.exponentialRampToValueAtTime(0.065,t0+0.06);
+  g.gain.exponentialRampToValueAtTime(0.0001,t0+0.42);
+  w.connect(f);f.connect(g);g.connect(master);w.start(t0);w.stop(t0+0.5);
+}
+// ── v4 거꾸로 말: 포먼트가 역방향 — 느리게 차오르다 뚝 끊기고, 낱말 순서도 거꾸로. 들이켜지는 언어. ──
+function swV4(text){
+  const t0=AC.currentTime;
+  if(!whisperBuf)whisperBuf=noiseBuf(1.5,false);
+  const words=String(text||'').toLowerCase().split(/[^a-z]+/).filter(w=>w).slice(0,7).reverse();
+  if(!words.length)return gulpThump(0.16);
+  const lp=AC.createBiquadFilter();lp.type='lowpass';
+  const total=0.06+words.length*0.15;
+  lp.frequency.setValueAtTime(480,t0);
+  lp.frequency.exponentialRampToValueAtTime(1900,t0+total);        // 살이 얇아진다 — 거꾸로
+  lp.connect(master);
+  let t=t0+0.02;
+  words.forEach((w,wi)=>{
+    const rise=0.55+0.45*(wi/Math.max(1,words.length-1));
+    const v=(w.match(/[aeiou]/)||['e'])[0], F=FORMANT[v];
+    const dur=0.06+Math.min(0.09,w.length*0.012);
+    for(const [ff,fg] of [[F[0],8],[F[1],4.5]]){
+      const n=AC.createBufferSource();n.buffer=whisperBuf;n.loop=true;
+      n.playbackRate.value=0.9+Math.random()*0.2;
+      const bp=AC.createBiquadFilter();bp.type='bandpass';bp.Q.value=5;
+      bp.frequency.setValueAtTime(ff*rise*0.82,t);
+      bp.frequency.exponentialRampToValueAtTime(ff*rise*1.12,t+dur);
+      const g=AC.createGain();
+      g.gain.setValueAtTime(0.0001,t);
+      g.gain.linearRampToValueAtTime(fg*(0.4+0.6*rise),t+dur*0.9); // 차오르다
+      g.gain.setValueAtTime(0.0001,t+dur*0.92);                    // 뚝
+      n.connect(bp);bp.connect(g);g.connect(lp);
+      n.start(t);n.stop(t+dur+0.02);
+    }
+    t+=dur+0.03+Math.random()*0.04;
+  });
+}
+// ── v5 수화기: 전화 대역의 웅얼거림 + 정전기. 이 말들이 건너온 거리. ──
+function swV5(text){
+  const t0=AC.currentTime;
+  const words=String(text||'').toLowerCase().split(/[^a-z]+/).filter(w=>w).slice(0,7);
+  if(!words.length)return gulpThump(0.16);
+  const sh=AC.createWaveShaper();                                   // 회선의 찌그러짐
+  const cv=new Float32Array(256);
+  for(let i=0;i<256;i++){const x=i/128-1;cv[i]=Math.tanh(x*3.2);}
+  sh.curve=cv;
+  const bp=AC.createBiquadFilter();bp.type='bandpass';bp.frequency.value=1100;bp.Q.value=0.9;
+  const trim=AC.createGain();trim.gain.value=0.46;
+  sh.connect(bp);bp.connect(trim);trim.connect(master);
+  let t=t0+0.02;
+  words.forEach(w=>{
+    const dur=0.07+Math.min(0.10,w.length*0.013);
+    const o=AC.createOscillator(),g=AC.createGain();
+    o.type='sawtooth';
+    let fr=95+Math.random()*70;
+    o.frequency.setValueAtTime(fr,t);
+    for(let j=1;j<=2;j++){fr*=0.9+Math.random()*0.25;o.frequency.setValueAtTime(fr,t+dur*j/3);} // 운율
+    g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(0.16,t+0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.connect(g);g.connect(sh);o.start(t);o.stop(t+dur+0.02);
+    t+=dur+0.035+Math.random()*0.05;
+  });
+  for(let k=0;k<4;k++){                                             // 정전기
+    const tt=t0+Math.random()*(t-t0);
+    const n=AC.createBufferSource();n.buffer=noiseBuf(0.02,false);
+    const hp=AC.createBiquadFilter();hp.type='highpass';hp.frequency.value=2600;
+    const g=AC.createGain();g.gain.setValueAtTime(0.05+Math.random()*0.05,tt);
+    g.gain.exponentialRampToValueAtTime(0.0001,tt+0.02);
+    n.connect(hp);hp.connect(g);g.connect(master);n.start(tt);n.stop(tt+0.03);
+  }
+}
+// ── v6 타자: 그 문장이 입력되던 리듬. 글자마다 키가 눌리고, 띄어쓰기는 둔하다. ──
+function swV6(text){
+  const t0=AC.currentTime;
+  const chs=[...String(text||'').slice(0,26)];
+  if(!chs.length)return gulpThump(0.16);
+  let t=t0+0.02;
+  chs.forEach(ch=>{
+    if(ch===' '){
+      const o=AC.createOscillator(),g=AC.createGain();
+      o.type='sine';o.frequency.setValueAtTime(150,t);o.frequency.exponentialRampToValueAtTime(88,t+0.05);
+      g.gain.setValueAtTime(0.28,t);g.gain.exponentialRampToValueAtTime(0.0001,t+0.06);
+      o.connect(g);g.connect(master);o.start(t);o.stop(t+0.07);
+    }else{
+      const n=AC.createBufferSource();n.buffer=clickBuf||(clickBuf=noiseBuf(0.08,false));
+      n.playbackRate.value=1.8+Math.random()*1.4;
+      const bp=AC.createBiquadFilter();bp.type='bandpass';bp.Q.value=1.6;
+      bp.frequency.value=2800+Math.random()*1900;
+      const g=AC.createGain();g.gain.setValueAtTime(0.55+Math.random()*0.25,t);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+0.018);
+      n.connect(bp);bp.connect(g);g.connect(master);n.start(t);n.stop(t+0.03);
+    }
+    t+=0.042+Math.random()*0.05;
+  });
+  // 마지막 — 입력이 끝나는 무거운 키
+  const o=AC.createOscillator(),g=AC.createGain();
+  o.type='sine';o.frequency.setValueAtTime(120,t);o.frequency.exponentialRampToValueAtTime(60,t+0.09);
+  g.gain.setValueAtTime(0.34,t);g.gain.exponentialRampToValueAtTime(0.0001,t+0.11);
+  o.connect(g);g.connect(master);o.start(t);o.stop(t+0.12);
+}
+// ── v7 구겨짐: 문장이 종이처럼 구겨져 던져진다. 잦아드는 미세 균열들. ──
+function swV7(text){
+  const t0=AC.currentTime, N=12+Math.min(14,((text||'').length/3)|0);
+  const o=AC.createOscillator(),g0=AC.createGain();                 // 접히는 저역
+  o.type='sine';o.frequency.setValueAtTime(240,t0);o.frequency.exponentialRampToValueAtTime(90,t0+0.16);
+  g0.gain.setValueAtTime(0.22,t0);g0.gain.exponentialRampToValueAtTime(0.0001,t0+0.18);
+  o.connect(g0);g0.connect(master);o.start(t0);o.stop(t0+0.2);
+  for(let k=0;k<N;k++){
+    const t=t0+0.55*Math.pow(Math.random(),0.55);                  // 앞쪽에 몰린 균열
+    const n=AC.createBufferSource();n.buffer=clickBuf||(clickBuf=noiseBuf(0.08,false));
+    n.playbackRate.value=1.2+Math.random()*2.2;
+    const bp=AC.createBiquadFilter();bp.type='bandpass';bp.Q.value=4;
+    bp.frequency.value=900+Math.random()*4300;
+    const g=AC.createGain();g.gain.setValueAtTime(0.16+Math.random()*0.30,t);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.008+Math.random()*0.014);
+    n.connect(bp);bp.connect(g);g.connect(master);n.start(t);n.stop(t+0.03);
+  }
+}
+// ── v8 몸북: 문장 하나 = 안에서 몸을 치는 둔기 한 번. 길수록 무겁다. ──
+function swV8(text){
+  const t0=AC.currentTime, wgt=Math.min(1,(text||'').length/90);
+  const o=AC.createOscillator(),g=AC.createGain();
+  o.type='sine';o.frequency.setValueAtTime(66,t0);o.frequency.exponentialRampToValueAtTime(37,t0+0.30);
+  g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(0.30+0.22*wgt,t0+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001,t0+0.38);
+  o.connect(g);g.connect(master);o.start(t0);o.stop(t0+0.4);
+  const n=AC.createBufferSource();n.buffer=noiseBuf(0.09,true);     // 살의 퍽
+  const f=AC.createBiquadFilter();f.type='lowpass';f.frequency.value=210;
+  const g2=AC.createGain();g2.gain.setValueAtTime(0.20,t0);g2.gain.exponentialRampToValueAtTime(0.0001,t0+0.08);
+  n.connect(f);f.connect(g2);g2.connect(master);n.start(t0);n.stop(t0+0.1);
+  const r=AC.createBufferSource();r.buffer=noiseBuf(0.6,false);     // 흉강의 울림
+  const rb=AC.createBiquadFilter();rb.type='bandpass';rb.frequency.value=92;rb.Q.value=14;
+  const g3=AC.createGain();g3.gain.setValueAtTime(0.0001,t0);
+  g3.gain.exponentialRampToValueAtTime(0.5,t0+0.03);
+  g3.gain.exponentialRampToValueAtTime(0.0001,t0+0.55);
+  r.connect(rb);rb.connect(g3);g3.connect(master);r.start(t0);r.stop(t0+0.6);
+}
+// ── v9 모래: 문장이 낱알로 흘러들어온다. 길수록 오래 쏟아진다. ──
+function swV9(text){
+  const t0=AC.currentTime, dur=0.4+Math.min(0.7,(text||'').length*0.006);
+  const n=AC.createBufferSource();n.buffer=noiseBuf(1.4,false);
+  const bp=AC.createBiquadFilter();bp.type='bandpass';bp.Q.value=1.8;
+  bp.frequency.setValueAtTime(2600,t0);
+  bp.frequency.exponentialRampToValueAtTime(850,t0+dur);            // 낱알이 깊이 가라앉는다
+  const g=AC.createGain();
+  g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(0.24,t0+0.07);
+  g.gain.setValueAtTime(0.24,t0+dur*0.75);g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+  n.connect(bp);bp.connect(g);g.connect(master);n.start(t0);n.stop(t0+dur+0.05);
+  for(let k=0;k<8;k++){                                             // 알갱이 몇이 벽을 친다
+    const t=t0+Math.random()*dur;
+    const c=AC.createBufferSource();c.buffer=clickBuf||(clickBuf=noiseBuf(0.08,false));
+    c.playbackRate.value=1.5+Math.random()*1.5;
+    const b2=AC.createBiquadFilter();b2.type='bandpass';b2.Q.value=6;b2.frequency.value=1400+Math.random()*2400;
+    const g2=AC.createGain();g2.gain.setValueAtTime(0.05+Math.random()*0.06,t);
+    g2.gain.exponentialRampToValueAtTime(0.0001,t+0.012);
+    c.connect(b2);b2.connect(g2);g2.connect(master);c.start(t);c.stop(t+0.03);
+  }
+}
 function sndSwallow(text){
   if(!audioOn)return;
   const t0=AC.currentTime;
   if(t0-lastSw<0.15)return; lastSw=t0;
   if(SND===2){ gulpThump(0.10); return; }            // v2: 입은 조용하다 — 충돌이 말한다
+  if(SND===3){ swV3(text); return; }
+  if(SND===4){ swV4(text); return; }
+  if(SND===5){ swV5(text); return; }
+  if(SND===6){ swV6(text); return; }
+  if(SND===7){ swV7(text); return; }
+  if(SND===8){ swV8(text); return; }
+  if(SND===9){ swV9(text); return; }
   if(whispers>=2){ gulpThump(0.16); return; }        // 쏟아질 땐 목넘김만 — "고를 새도 없이"
   if(!whisperBuf)whisperBuf=noiseBuf(1.5,false);
   const words=String(text||'').toLowerCase().split(/[^a-z]+/).filter(w=>w).slice(0,7);
@@ -1007,6 +1200,12 @@ addEventListener('pointerdown',()=>{
 document.addEventListener('fullscreenchange',()=>{resize();});
 document.addEventListener('webkitfullscreenchange',()=>{resize();});
 addEventListener('pointerdown',()=>{initAudio();if(AC&&AC.resume)AC.resume();},{once:true});
+// 숫자키 1~9 = 삼킴 소리 버전 라이브 전환 (비교 청취용 — 전시엔 키보드 없음)
+addEventListener('keydown',e=>{
+  const d=parseInt(e.key);
+  if(d>=1&&d<=9&&SND_NAMES[d]){SND=d;sndLabelAt=performance.now();
+    if(!audioOn){initAudio();if(AC&&AC.resume)AC.resume();}}
+});
 addEventListener('keydown',()=>{initAudio();if(AC&&AC.resume)AC.resume();},{once:true});
 document.fonts.ready.then(()=>{initAudio();requestAnimationFrame(loop);});
 </script>
