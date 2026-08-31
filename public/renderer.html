@@ -283,7 +283,7 @@ function stepLetters(dt,t){
       if(qy>0.10) L.bond=Math.max(0,L.bond-0.010);     // 위에서만 벽 충돌로 조금 느슨해진다
     }
     // ── 위 바닥 — 삼킨 것이 여기 쌓인다 ──
-    const floorQY=0.455+0.006*Math.sin(t*0.43);
+    const floorQY=0.405+0.006*Math.sin(t*0.43);   // 화면 밑변에 더미가 잘리지 않는 높이
     if(qy>floorQY && !(canalDir<0&&purge>0.02)){
       const [,fy]=toScreen(qx,floorQY);
       L.y=fy; if(L.vy>0){ L.vy*=-0.06; }              // 젖은 바닥 — 튀지 않는다
@@ -680,9 +680,51 @@ async function startReplay(url){
     await sleep(2500); letters.length=0; koT=''; think='';   // 한 바퀴 끝 — 잠깐 숨 고르고 다시
   }
 }
+// ── 말뭉치 재생 ──
+// 녹화된 실시간을 그대로 트는 대신, 미리 골라둔 말들을 우리가 설계한 리듬으로 먹인다.
+// 녹화의 간격은 몸의 사정(LLM 지연·페이지 로딩)이지 작품의 리듬이 아니었다.
+async function startCorpus(url){
+  let items;
+  try{ const j=await fetch(url).then(r=>r.json()); items=j.items||[]; }
+  catch(e){ return false; }
+  if(!items.length) return false;
+
+  const shuffled=()=>{ const a=items.slice();
+    for(let i=a.length-1;i>0;i--){ const j2=(Math.random()*(i+1))|0; [a[i],a[j2]]=[a[j2],a[i]]; }
+    return a; };
+
+  let poison=0;              // 쌓인 독 — 게움의 원인이 된다
+  for(;;){
+    for(const it of shuffled()){
+      const venom=Math.max(0,Math.min(3,it.venom??2));
+      handleMsg({t:'reading',text:it.text});
+      poison+=0.022+venom*0.027;      // 대략 15~20초에 한 번 게우는 속도 — 삭을 틈은 준다
+      handleMsg({t:'state',pressure:Math.min(1,poison)});
+
+      // 소화불량이 임계를 넘으면 몸이 게운다 — 원인이 있는 게움
+      if(poison>=1){
+        await sleep(700+Math.random()*900);
+        handleMsg({t:'verdict',v:'PURGE',toxin:7,nourishment:-2,text:it.text});
+        poison=0.15;
+        await sleep(2600+Math.random()*1400);   // 게우고 난 뒤의 숨
+        continue;
+      }
+      if(venom>=2 && Math.random()<0.22){
+        handleMsg({t:'verdict',v:'GAG',toxin:5,nourishment:-1,text:it.text});
+      }
+
+      // 리듬: 대개 촘촘하게, 가끔 "고를 새도 없이" 몰아치고, 가끔 숨을 고른다
+      const r=Math.random();
+      if(r<0.22)      await sleep(340+Math.random()*280);    // 쏟아짐
+      else if(r<0.86) await sleep(1000+Math.random()*1100);  // 보통
+      else            await sleep(2600+Math.random()*1600);  // 숨
+    }
+  }
+}
 function connect(){
   let done=false;
-  const fallback=()=>{if(done)return;done=true;startReplay('./session.jsonl');};
+  const fallback=()=>{if(done)return;done=true;
+    startCorpus('./corpus.json').then(ok=>{ if(!ok) startReplay('./session.jsonl'); });};
   let ws;
   try{ ws=new WebSocket(`ws://${location.host}/ws`); }
   catch(e){ fallback(); return; }

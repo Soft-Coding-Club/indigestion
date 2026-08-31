@@ -22,6 +22,8 @@ export type Hooks = {
   onMovement?: (name: Movement) => void | Promise<void>;
   onGulp?: (ev: ReadEvent) => void;
   onRuminate?: (motor: MotorApi, durMs: number) => Promise<void>;
+  // 이 피드에서 아직 안 읽은 글이 하나도 없다 — 다른 게시판/정렬로 옮겨달라는 요청
+  onExhausted?: () => Promise<boolean>;
   log?: (msg: string) => void;
 };
 
@@ -216,7 +218,8 @@ async function studyOne(
   const target = (await hooks.decideNext?.().catch(() => null)) ?? null;
   if (target?.threadUrl) {
     if (target.why) log(`기억을 따라간다: ${target.why}`);
-    await page.goto(target.threadUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
+    const tu = target.threadUrl.includes("?") ? target.threadUrl : `${target.threadUrl}?sort=controversial`;
+    await page.goto(tu, { waitUntil: "domcontentloaded" }).catch(() => {});
     await sleep(2000);
     const title = ((await page.locator('h1[slot="title"]').first().textContent().catch(() => "")) ?? "").trim();
     log(`스레드 진입(기억): "${title.slice(0, 60)}"`);
@@ -260,11 +263,22 @@ async function studyOne(
       }
     }
     if (!cands.length) return;
-    // 읽은 스레드는 다시 들어가지 않는다 — 전부 읽었으면 피드를 더 내린다
-    const unseen = cands.filter((c) => !seen.has(c.permalink));
+    // 읽은 스레드는 다시 들어가지 않는다.
+    // 예전엔 여기서 한 번 스크롤하고 돌아갔는데, 그러면 피드 첫 화면만 맴돌다
+    // 되새김 루프에 갇힌다(8/31 녹화 실패의 원인). 이제는 끝까지 내려가 보고,
+    // 그래도 없으면 다른 게시판으로 옮긴다.
+    let unseen = cands.filter((c) => !seen.has(c.permalink));
+    for (let dive = 0; unseen.length === 0 && dive < 8; dive++) {
+      await motor.scrollBy(rand(600, 900));
+      await sleep(700);
+      cands = await visibleTitleBoxes(page, view);
+      unseen = cands.filter((c) => !seen.has(c.permalink));
+    }
     if (unseen.length === 0) {
-      await motor.scrollBy(rand(400, 700));
-      await sleep(600);
+      log("이 피드는 다 먹었다 — 다른 곳으로");
+      const moved = await hooks.onExhausted?.().catch(() => false);
+      if (!moved) await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+      await sleep(2000);
       return;
     }
     const chosen = pick(unseen);
@@ -276,10 +290,12 @@ async function studyOne(
     await motor.dwell(rand(400, 900));
     log(`스레드 진입: "${chosen.title}"`);
     await hooks.onEnterThread?.(chosen.title);
+    // 기본(best) 정렬은 위로와 농담을 위로 올린다. controversial이라야 경멸이 먼저 온다.
     await page.mouse.click(motor.cur.x, motor.cur.y);
-    await page.waitForURL(`**${chosen.permalink}**`, { timeout: 8000 }).catch(async () => {
-      await page.goto(`https://www.reddit.com${chosen.permalink}`, { waitUntil: "domcontentloaded" });
-    });
+    await page
+      .goto(`https://www.reddit.com${chosen.permalink}?sort=controversial`, { waitUntil: "domcontentloaded" })
+      .catch(() => {});
+    await sleep(1200);
 
     await readThread(page, view, motor, hooks, deadline).catch((e) =>
       log(`읽기 중단: ${(e as Error).message.split("\n")[0]}`),

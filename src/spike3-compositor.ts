@@ -17,7 +17,12 @@ const FAKE = process.argv.includes("--fake");
 const EXHIBIT = process.env.EXHIBIT === "1";
 const KIOSK = process.env.KIOSK === "1"; // 이 컴퓨터가 표시까지 맡는 단독 설치 모드
 const DURATION_MS = Number(process.env.DURATION_MS ?? (EXHIBIT || KIOSK ? 0 : 75_000));
-const SUB = process.env.SUB ?? "AmItheAsshole";
+// 먹이 게시판 — 본문이 스크린샷이 아니라 텍스트인 곳만 고름(8/31 실측:
+// insanepeoplefacebook은 50개 중 본문 0개, insaneparents도 이미지 위주라 댓글만 먹혔다).
+const SUBS = (process.env.SUBS ?? "raisedbynarcissists,JUSTNOMIL,AmItheAsshole,TrueOffMyChest,insaneparents")
+  .split(",").map((x) => x.trim()).filter(Boolean);
+let subIdx = 0;
+const SUB = process.env.SUB ?? SUBS[0];
 const PORT = 4777;
 const VIEW = { width: 1280, height: 720 };
 
@@ -395,10 +400,28 @@ async function run(page: Page, face: Page | null) {
 
   const startUrl = `https://www.reddit.com/r/${SUB}/controversial/?t=week`;
 
+  // 이 피드를 다 먹었다 — 다음 게시판으로 옮긴다. 정렬도 바꿔 다른 얼굴을 본다.
+  const SORTS = ["controversial/?t=week", "controversial/?t=month", "top/?t=week", "new/"];
+  let sortIdx = 0;
+  async function onExhausted(): Promise<boolean> {
+    subIdx = (subIdx + 1) % SUBS.length;
+    if (subIdx === 0) sortIdx = (sortIdx + 1) % SORTS.length;
+    const next = SUBS[subIdx];
+    const url = `https://www.reddit.com/r/${next}/${SORTS[sortIdx]}`;
+    log(`게시판 이동 → r/${next} (${SORTS[sortIdx]})`);
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      await new Promise((r) => setTimeout(r, 2500));
+      send({ t: "nav", url: page.url(), title: `r/${next}` });
+      pushJourney(`r/${next}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // 기억이 끌어당기면 — Reddit 검색으로 그것을 찾아나선다
-  // STAY=1: 수집 모드 — 몸이 독을 피해 달아나지 못하게 서브레딧에 가둔다
   async function decideNext(): Promise<NextTarget> {
-    if (process.env.STAY) return null;
     if (FAKE || threadsRead === 0) return null;
     const mems = gut.salient(6);
     if (mems.length < 2 || Math.random() < 0.45) return null;
@@ -408,7 +431,10 @@ async function run(page: Page, face: Page | null) {
     pushJourney(`search: ${d.query.slice(0, 30)}`);
     log(`검색 충동: "${d.query}" — ${d.why}`);
     try {
-      await page.goto(`https://www.reddit.com/search/?q=${encodeURIComponent(d.query)}`, {
+      // 검색은 먹이 게시판 안에서만 — 안 그러면 몸이 순한 곳으로 달아난다
+      // (STAY=1로 묶었더니 피드가 말라 되새김 루프에 갇혔고, 풀었더니 r/90s로 갔다. 둘 다 실패.)
+      const scope = SUBS.map((x) => `subreddit:${x}`).join(" OR ");
+      await page.goto(`https://www.reddit.com/search/?q=${encodeURIComponent(`${d.query} (${scope})`)}`, {
         waitUntil: "domcontentloaded",
       });
       send({ t: "nav", url: page.url(), title: `search: ${d.query}` });
@@ -418,8 +444,13 @@ async function run(page: Page, face: Page | null) {
           .filter((h) => h.includes("/comments/"))
           .slice(0, 8),
       );
-      if (!links.length) return null;
-      const pickHref = links[Math.floor(Math.random() * links.length)];
+      // 검색 결과가 풀 밖으로 새면 버린다
+      const inPool = links.filter((h) => SUBS.some((sub) => h.includes(`/r/${sub}/`)));
+      if (!inPool.length) {
+        log("검색이 먹이 밖으로 나갔다 — 무시");
+        return null;
+      }
+      const pickHref = inPool[Math.floor(Math.random() * inPool.length)];
       return { threadUrl: new URL(pickHref, "https://www.reddit.com").toString(), why: d.why };
     } catch {
       return null;
@@ -447,6 +478,7 @@ async function run(page: Page, face: Page | null) {
         onMovement,
         onGulp,
         onRuminate,
+        onExhausted,
         onEnterThread: (title) => {
           currentThread = title;
           threadsRead += 1;

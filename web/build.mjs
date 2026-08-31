@@ -13,12 +13,27 @@ rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 if (existsSync(linkBak)) cpSync(linkBak, link, { recursive: true });
 
+// 공개 배포 안전장치: 극단적 혐오발언(슬러)이 담긴 것은 제외. 잔혹함은 남기고 최악만 뺀다.
+const SLUR = /\b(n[i1]gg|f[a4]gg?|f[a4]g\b|k[i1]ke|sp[i1]c\b|ch[i1]nk|tr[a4]nn|ret[a4]rd|c[o0]on\b|w[e3]tb[a4]ck|g[o0]{2}k\b|beaner|towelhead|dyke\b)/i;
+
 // 렌더러 = index.html
 cpSync(root + "public/renderer.html", dist + "/index.html");
 // 폰트 번들
 cpSync(root + "public/vendor", dist + "/vendor", { recursive: true });
 // 카탈로그 이미지
 if (existsSync(root + "press/hero-final.png")) cpSync(root + "press/hero-final.png", dist + "/hero.png");
+// 선별된 말뭉치 — 재생의 주 재료. 있으면 렌더러가 이걸 먼저 쓴다.
+if (existsSync(root + "out/corpus.json")) {
+  const c = JSON.parse(readFileSync(root + "out/corpus.json", "utf8"));
+  // 실존 공인을 지목한 말은 뺀다 — 이 작품은 사적인 관계에서 쏟아진 말만 먹는다
+const NAMED = /\b(trump|melania|biden|musk|obama|putin|harris|vance)\b/i;
+const items = (c.items || []).filter((x) => x?.text && !SLUR.test(x.text) && !NAMED.test(x.text) && (x.venom ?? 2) >= 1)
+    .map((x) => ({ text: x.text, venom: x.venom ?? 2, aim: x.aim ?? 2 }));
+  writeFileSync(dist + "/corpus.json", JSON.stringify({ n: items.length, items }));
+  console.log(`말뭉치 ${items.length}개 포함`);
+} else {
+  console.log("말뭉치 없음 — 녹화 재생으로 폴백");
+}
 
 // 세션 필터 — 렌더러가 쓰는 이벤트만 남긴다 (cur/frame/chew 등 브라우저-표시 잔재 제거)
 // think(토큰 스트림)은 더 이상 화면에 그리지 않는다 — 재생만 무겁게 한다. 버린다.
@@ -26,7 +41,6 @@ const KEEP = new Set(["reading", "verdict", "gulp", "movement", "nav", "state"])
 // state는 부드럽게 보간되는 값이라 촘촘할 필요가 없다 — 솎아낸다.
 let stateN = 0;
 // 안전장치: 극단적 혐오발언(슬러)이 담긴 이벤트는 공개 배포에서 제외. 잔혹함은 남기고 최악만 뺀다.
-const SLUR = /\b(n[i1]gg|f[a4]gg?|f[a4]g\b|k[i1]ke|sp[i1]c\b|ch[i1]nk|tr[a4]nn|ret[a4]rd|c[o0]on\b|w[e3]tb[a4]ck|g[o0]{2}k\b|beaner|towelhead|dyke\b)/i;
 const dirty = (m) => SLUR.test([m?.text, m?.translation, (m?.matter || []).join(" "), m?.marginalia].filter(Boolean).join(" "));
 const src = readFileSync(root + "out/session.jsonl", "utf8").trim().split("\n").filter(Boolean);
 let kept = [], base = null, verdicts = { SWALLOW: 0, GAG: 0, PURGE: 0 }, dropped = 0;
