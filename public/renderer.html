@@ -659,7 +659,7 @@ const SND_NAMES={1:'속삭임 — 말의 목소리',2:'활자 충돌 — 물질'
 let sndLabelAt=0;
 const MASTER_V=0.16*VOL;
 let AC=null,master=null,audioOn=false;
-let breathG=null,gutG=null,gutF=null,lastSw=0,lastClick=0,clickBuf=null;
+let breathG=null,gutG=null,gutF=null,lastSw=0,lastClick=0,clickBuf=null,pBus=null;
 function noiseBuf(sec,brown){
   const b=AC.createBuffer(1,AC.sampleRate*sec,AC.sampleRate),d=b.getChannelData(0);
   let last=0;
@@ -685,6 +685,10 @@ function initAudio(){
     gutF=AC.createBiquadFilter();gutF.type='lowpass';gutF.frequency.value=90;gutF.Q.value=0.8;
     gutG=AC.createGain();gutG.gain.value=0;
     gut.connect(gutF);gutF.connect(gutG);gutG.connect(master);
+    // 게움 버스 — 발작은 살 너머에서 들린다. 억눌린 것이 노골적인 것보다 역겹다.
+    pBus=AC.createGain();pBus.gain.value=1;
+    const pLP=AC.createBiquadFilter();pLP.type='lowpass';pLP.frequency.value=780;
+    pBus.connect(pLP);pLP.connect(master);
     o1.start();o2.start();gut.start();
     audioOn=true;if(AC.resume)AC.resume();
   }catch(e){console.error('audio',e);}
@@ -983,100 +987,122 @@ function sndSwallow(text){
   o.connect(g2);g2.connect(master);o.start(t);o.stop(t+0.35);
   setTimeout(()=>{whispers=Math.max(0,whispers-1);},(t-t0+0.45)*1000);
 }
-// 구역 — 두 번의 짧은 수축. 올라오다 만다.
+// 구역 — 헛구역질 한 번. 조였다 무너진다. (게움과 같은 후두 언어)
 function sndGag(){
-  if(!audioOn)return;const t0=AC.currentTime;
-  for(const dt of [0,0.19]){
-    const n=AC.createBufferSource();n.buffer=noiseBuf(0.25,true);
-    const f=AC.createBiquadFilter();f.type='bandpass';f.Q.value=1.4;f.frequency.value=210;
-    const g=AC.createGain();
-    g.gain.setValueAtTime(0.0001,t0+dt);g.gain.exponentialRampToValueAtTime(0.30,t0+dt+0.03);
-    g.gain.exponentialRampToValueAtTime(0.0001,t0+dt+0.16);
-    n.connect(f);f.connect(g);g.connect(master);n.start(t0+dt);n.stop(t0+dt+0.25);
-  }
+  if(!audioOn)return;
+  retchV(AC.currentTime,0.20);
 }
-// 게움 — 발작의 해부. 슁— 하는 스위프가 아니라:
-// ① 헛구역질(발작적 수축 2~3번, 점점 급해짐) ② 본 게움(경련 AM이 걸린 탁류 +
-// 꾸르륵 + 서브 낙하) ③ 튀는 것들 ④ 들숨 ⑤ 숨죽임. 구역감은 떨림과 순서에서 온다.
-function retch(t,v){
-  // 목이 뒤집히려다 마는 수축 — 급한 저역 딥 + 목 노이즈
-  const o=AC.createOscillator(),g=AC.createGain();
-  o.type='sine';o.frequency.setValueAtTime(105,t);
-  o.frequency.exponentialRampToValueAtTime(48,t+0.09);
-  g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(v,t+0.010);
-  g.gain.exponentialRampToValueAtTime(0.0001,t+0.13);
-  o.connect(g);g.connect(master);o.start(t);o.stop(t+0.15);
-  const n=AC.createBufferSource();n.buffer=noiseBuf(0.2,true);
-  const bp=AC.createBiquadFilter();bp.type='bandpass';bp.Q.value=1.6;
-  bp.frequency.setValueAtTime(300,t);bp.frequency.exponentialRampToValueAtTime(160,t+0.11);
-  const gn=AC.createGain();gn.gain.setValueAtTime(0.0001,t);
-  gn.gain.exponentialRampToValueAtTime(v*1.3,t+0.012);
-  gn.gain.exponentialRampToValueAtTime(0.0001,t+0.12);
-  n.connect(bp);bp.connect(gn);gn.connect(master);n.start(t);n.stop(t+0.2);
+// 게움 — 후두의 사건. 이전 판(노이즈 스위프+사인 트레몰로)에 없던 것 = 목소리.
+// 구역질은 조여진 발성이다: ①헛구역질(조였다 무너지는 신음) ②조임(상승하는 목졸림)
+// ③성문 폐쇄(찰나의 완전 정지 — 여기서 듣는 목이 같이 조인다) ④터짐(젖은 붕괴+덩어리)
+// ⑤들숨 ⑥숨죽임. 경련은 사인이 아니라 불규칙 게이팅이다.
+function groanSeg(t,dur,f0,opt){
+  // 조여진 신음: 톱니 → 목의 왜곡 → 인두 포먼트 2개. 피치는 랜덤워크(매끈하면 신스다).
+  const o=AC.createOscillator();o.type='sawtooth';
+  let fr=f0,tt=t;
+  o.frequency.setValueAtTime(fr,tt);
+  while(tt<t+dur){
+    const step=0.03+Math.random()*0.03;
+    fr=Math.max(48,Math.min(240,fr*(opt.rise??1.0)*(0.93+Math.random()*0.14)));
+    o.frequency.linearRampToValueAtTime(fr,tt+step);tt+=step;
+  }
+  const shp=AC.createWaveShaper();
+  const cv=new Float32Array(256);
+  for(let i=0;i<256;i++){const x=i/128-1;cv[i]=Math.tanh(x*(opt.drive??2.6));}
+  shp.curve=cv;
+  const f1=AC.createBiquadFilter();f1.type='bandpass';f1.Q.value=4;
+  const f2=AC.createBiquadFilter();f2.type='bandpass';f2.Q.value=5;
+  f1.frequency.setValueAtTime(opt.F1??470,t);
+  f2.frequency.setValueAtTime(opt.F2??880,t);
+  if(opt.F1e)f1.frequency.exponentialRampToValueAtTime(opt.F1e,t+dur);
+  if(opt.F2e)f2.frequency.exponentialRampToValueAtTime(opt.F2e,t+dur);
+  const g=AC.createGain();g.gain.value=0;
+  // 경련 게이팅 — 28~78ms 불규칙 진폭 계단 (몸의 떨림은 박자가 없다)
+  let gt=t;
+  while(gt<t+dur){
+    const e=(gt-t)/dur;
+    g.gain.setValueAtTime((opt.env?opt.env(e):1)*(0.5+Math.random()*0.5)*opt.v,gt);
+    gt+=0.028+Math.random()*0.05;
+  }
+  g.gain.setValueAtTime(0.0001,t+dur);
+  const mg=AC.createGain();mg.gain.value=1;
+  o.connect(shp);shp.connect(f1);shp.connect(f2);
+  f1.connect(mg);f2.connect(mg);mg.connect(g);g.connect(master);
+  o.start(t);o.stop(t+dur+0.02);
+}
+function chokeNoise(t,dur,v){
+  // 조임의 숨 — 좁은 대역이 위로 조여 올라간다. 눌린 압력.
+  const n=AC.createBufferSource();n.buffer=noiseBuf(dur+0.1,false);
+  const bp=AC.createBiquadFilter();bp.type='bandpass';bp.Q.value=7;
+  bp.frequency.setValueAtTime(340,t);
+  bp.frequency.exponentialRampToValueAtTime(980,t+dur);
+  const g=AC.createGain();
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(v,t+dur*0.85);
+  g.gain.setValueAtTime(0.0001,t+dur);           // 뚝 — 성문이 닫힌다
+  n.connect(bp);bp.connect(g);g.connect(pBus);n.start(t);n.stop(t+dur+0.05);
+}
+function retchV(t,v){
+  // 헛구역질: 조였다 — 무너진다. 터지지 못한 조임.
+  groanSeg(t,0.22,88+Math.random()*22,{rise:1.05,v:v*1.8,env:e=>Math.pow(e,1.3),drive:2.2});
+  chokeNoise(t,0.20,v*0.9);
+  const o=AC.createOscillator(),g=AC.createGain();       // 무너지는 저역
+  const t1=t+0.20;
+  o.type='sine';o.frequency.setValueAtTime(96,t1);o.frequency.exponentialRampToValueAtTime(44,t1+0.09);
+  g.gain.setValueAtTime(0.0001,t1);g.gain.exponentialRampToValueAtTime(v*1.1,t1+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001,t1+0.12);
+  o.connect(g);g.connect(pBus);o.start(t1);o.stop(t1+0.14);
 }
 function sndPurge(){
   if(!audioOn)return;const t0=AC.currentTime;
-  // ── ① 헛구역질 — 올라오려다 마는 수축이 먼저 온다 ──
+  // ── ① 헛구역질 — 점점 급해진다 ──
   const nR=2+(Math.random()<0.5?1:0);
-  let tr=t0+0.03;
-  for(let k=0;k<nR;k++){ retch(tr,0.20+k*0.08); tr+=0.27+Math.random()*0.09-k*0.03; }
-  const tH=tr+0.05;
-  // ── ② 본 게움 — 경련이 걸린 탁류 ──
-  const n=AC.createBufferSource();n.buffer=noiseBuf(2.0,false);   // 백색 — 갈색은 스위프가 올라가며 스스로 꺼진다
-  const bp=AC.createBiquadFilter();bp.type='bandpass';bp.Q.value=0.7;
-  bp.frequency.setValueAtTime(140,tH);
-  bp.frequency.exponentialRampToValueAtTime(720,tH+1.1);       // 목을 타고 올라온다
+  let tr=t0+0.02;
+  for(let k=0;k<nR;k++){ retchV(tr,0.20+k*0.08); tr+=0.40-k*0.04+Math.random()*0.08; }
+  // ── ② 조임 — 목이 잠기며 끝까지 조여 올라간다 ──
+  const tT=tr+0.04, TEN=0.46;
+  groanSeg(tT,TEN,92,{rise:1.06,v:1.9,env:e=>Math.pow(e,1.7),drive:2.2,F1:470,F1e:640,F2:880,F2e:1150});
+  chokeNoise(tT,TEN,1.3);
+  // ── ③ 성문 폐쇄 — 75ms의 완전한 정지. 여기서 듣는 목이 같이 조인다. ──
+  const tB=tT+TEN+0.075;
+  // ── ④ 터짐 — 젖은 광대역 붕괴 + 덩어리들 + 풀리는 신음 ──
+  const n=AC.createBufferSource();n.buffer=noiseBuf(0.8,false);
+  const lp=AC.createBiquadFilter();lp.type='lowpass';
+  lp.frequency.setValueAtTime(2400,tB);
+  lp.frequency.exponentialRampToValueAtTime(330,tB+0.55);
   const g=AC.createGain();
-  g.gain.setValueAtTime(0.0001,tH);
-  g.gain.exponentialRampToValueAtTime(3.0,tH+0.09);            // 급한 어택 — 쏟아짐
-  g.gain.setValueAtTime(3.0,tH+0.85);
-  g.gain.exponentialRampToValueAtTime(0.0001,tH+1.42);
-  // 떨림 — 근육 경련의 진폭 변조 (11→7Hz). 이것이 구역의 질감.
-  const lfo=AC.createOscillator(),lg=AC.createGain();
-  lfo.type='sine';lfo.frequency.setValueAtTime(11,tH);
-  lfo.frequency.linearRampToValueAtTime(7,tH+1.3);
-  lg.gain.value=1.5; lfo.connect(lg);lg.connect(g.gain);
-  n.connect(bp);bp.connect(g);g.connect(master);
-  n.start(tH);n.stop(tH+1.55); lfo.start(tH);lfo.stop(tH+1.55);
-  // 서브 낙하 — 바닥이 꺼진다
-  const o=AC.createOscillator(),gg=AC.createGain();
-  o.type='sine';o.frequency.setValueAtTime(90,tH);o.frequency.exponentialRampToValueAtTime(24,tH+1.15);
-  gg.gain.setValueAtTime(0.0001,tH);gg.gain.linearRampToValueAtTime(0.5,tH+0.14);
-  gg.gain.setValueAtTime(0.5,tH+0.80);gg.gain.exponentialRampToValueAtTime(0.0001,tH+1.35);
-  o.connect(gg);gg.connect(master);o.start(tH);o.stop(tH+1.4);
-  // 꾸르륵 — 탁류 속의 액체
-  for(let k=0;k<4;k++){
-    const t=tH+0.15+Math.random()*0.85;
+  g.gain.setValueAtTime(0.0001,tB);
+  g.gain.exponentialRampToValueAtTime(1.9,tB+0.030);
+  g.gain.exponentialRampToValueAtTime(0.0001,tB+0.62);
+  n.connect(lp);lp.connect(g);g.connect(pBus);n.start(tB);n.stop(tB+0.68);
+  groanSeg(tB,0.72,150,{rise:0.955,v:1.3,env:e=>Math.pow(1-e,0.6),drive:2.4,F1:520,F1e:360,F2:980,F2e:620});
+  for(let k=0;k<12;k++){                                  // 덩어리 — 앞에 몰린 군집
+    const tt=tB+Math.pow(Math.random(),1.6)*0.34;
     const ob=AC.createOscillator(),gb=AC.createGain();
-    ob.type='sine';const f0=180+Math.random()*160;
-    ob.frequency.setValueAtTime(f0,t);ob.frequency.exponentialRampToValueAtTime(f0*0.45,t+0.10);
-    gb.gain.setValueAtTime(0.0001,t);gb.gain.exponentialRampToValueAtTime(0.10,t+0.012);
-    gb.gain.exponentialRampToValueAtTime(0.0001,t+0.11);
-    ob.connect(gb);gb.connect(master);ob.start(t);ob.stop(t+0.13);
+    const f0=130+Math.random()*190;
+    ob.type='sine';ob.frequency.setValueAtTime(f0,tt);
+    ob.frequency.exponentialRampToValueAtTime(f0*0.5,tt+0.07);
+    gb.gain.setValueAtTime(0.0001,tt);gb.gain.exponentialRampToValueAtTime(0.18,tt+0.008);
+    gb.gain.exponentialRampToValueAtTime(0.0001,tt+0.09);
+    ob.connect(gb);gb.connect(pBus);ob.start(tt);ob.stop(tt+0.11);
   }
-  // ── ③ 튀는 것들 — 유리에 닿는 젖은 잔해 ──
-  const tS=tH+0.95;
-  for(let k=0;k<8;k++){
-    const t=tS+Math.random()*0.45;
-    const c=AC.createBufferSource();c.buffer=noiseBuf(0.09,true);
-    const cb=AC.createBiquadFilter();cb.type='bandpass';cb.Q.value=1.8;
-    cb.frequency.value=260+Math.random()*640;
-    const cg=AC.createGain();cg.gain.setValueAtTime(0.08+Math.random()*0.13,t);
-    cg.gain.exponentialRampToValueAtTime(0.0001,t+0.035+Math.random()*0.04);
-    c.connect(cb);cb.connect(cg);cg.connect(master);c.start(t);c.stop(t+0.1);
-  }
-  // 뒤늦게 떨어지는 방울
+  const so=AC.createOscillator(),sg=AC.createGain();      // 바닥이 꺼진다
+  so.type='sine';so.frequency.setValueAtTime(64,tB);so.frequency.exponentialRampToValueAtTime(27,tB+0.5);
+  sg.gain.setValueAtTime(0.0001,tB);sg.gain.linearRampToValueAtTime(0.45,tB+0.05);
+  sg.gain.exponentialRampToValueAtTime(0.0001,tB+0.6);
+  so.connect(sg);sg.connect(pBus);so.start(tB);so.stop(tB+0.65);
+  // 뒤늦은 방울
   for(let k=0;k<3;k++){
-    const t=tH+1.6+k*0.26+Math.random()*0.18;
+    const tt=tB+0.7+k*0.24+Math.random()*0.16;
     const ob=AC.createOscillator(),gb=AC.createGain();
-    ob.type='sine';const f0=330+Math.random()*220;
-    ob.frequency.setValueAtTime(f0,t);ob.frequency.exponentialRampToValueAtTime(f0*1.3,t+0.05);
-    gb.gain.setValueAtTime(0.0001,t);gb.gain.exponentialRampToValueAtTime(0.05,t+0.008);
-    gb.gain.exponentialRampToValueAtTime(0.0001,t+0.06);
-    ob.connect(gb);gb.connect(master);ob.start(t);ob.stop(t+0.08);
+    const f0=330+Math.random()*220;
+    ob.type='sine';ob.frequency.setValueAtTime(f0,tt);ob.frequency.exponentialRampToValueAtTime(f0*1.3,tt+0.05);
+    gb.gain.setValueAtTime(0.0001,tt);gb.gain.exponentialRampToValueAtTime(0.05,tt+0.008);
+    gb.gain.exponentialRampToValueAtTime(0.0001,tt+0.06);
+    ob.connect(gb);gb.connect(pBus);ob.start(tt);ob.stop(tt+0.08);
   }
-  // ── ④ 들숨 — 몸이 겨우 숨을 되찾는다 ──
-  const tG=tH+1.52;
+  // ── ⑤ 들숨 ──
+  const tG=tB+0.66;
   const br=AC.createBufferSource();br.buffer=noiseBuf(0.4,false);
   const hp=AC.createBiquadFilter();hp.type='highpass';hp.frequency.value=1100;
   const bg=AC.createGain();
@@ -1084,7 +1110,7 @@ function sndPurge(){
   bg.gain.linearRampToValueAtTime(0.09,tG+0.20);
   bg.gain.exponentialRampToValueAtTime(0.0001,tG+0.34);
   br.connect(hp);hp.connect(bg);bg.connect(master);br.start(tG);br.stop(tG+0.4);
-  // ── ⑤ 숨죽임 — 방이 조용해졌다가 천천히 돌아온다 ──
+  // ── ⑥ 숨죽임 ──
   master.gain.cancelScheduledValues(t0);
   master.gain.setValueAtTime(MASTER_V,t0);
   master.gain.setValueAtTime(MASTER_V,tG+0.35);
