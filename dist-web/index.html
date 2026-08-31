@@ -680,17 +680,60 @@ function audioFrame(t){
   gutG.gain.value=Math.max(0,0.05+0.05*Math.sin(t*1.1)+0.04*Math.sin(t*0.37+1.7)+toxin*0.05+purge*0.24);
   gutF.frequency.value=80+30*Math.sin(t*0.23)+purge*260+dayT*24;
 }
-// 삼킴 — 목을 타고 내려가는 둔탁한 하강. 쏟아질 땐 겹치지 않게 숨을 고른다.
-function sndSwallow(){
-  if(!audioOn)return;const t0=AC.currentTime;
-  if(t0-lastSw<0.32)return; lastSw=t0;
-  const o=AC.createOscillator(),g=AC.createGain(),f=AC.createBiquadFilter();
-  o.type='sine';o.frequency.setValueAtTime(150+Math.random()*40,t0);
-  o.frequency.exponentialRampToValueAtTime(46,t0+0.42);
-  f.type='lowpass';f.frequency.value=300;
-  g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(0.36,t0+0.05);
-  g.gain.exponentialRampToValueAtTime(0.0001,t0+0.55);
-  o.connect(f);f.connect(g);g.connect(master);o.start(t0);o.stop(t0+0.6);
+// 삼킴 — 문장이 들어올 때, 그 말이 살 너머에서 웅얼거린다.
+// 신스 하강음이 아니라 문장 자체에서 파생한 속삭임: 단어의 모음이 포먼트 대역이 되고,
+// 목을 타고 내려가며 대역이 가라앉는다. 무슨 말인지는 끝내 들리지 않는다 — 벽 너머의 언성처럼.
+let whisperBuf=null, whispers=0;
+const FORMANT={a:[780,1220],e:[420,2100],i:[300,2500],o:[460,850],u:[330,700]};
+function gulpThump(v){
+  const t0=AC.currentTime,o=AC.createOscillator(),g=AC.createGain();
+  o.type='sine';o.frequency.setValueAtTime(88,t0);o.frequency.exponentialRampToValueAtTime(42,t0+0.22);
+  g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(v||0.20,t0+0.03);
+  g.gain.exponentialRampToValueAtTime(0.0001,t0+0.30);
+  o.connect(g);g.connect(master);o.start(t0);o.stop(t0+0.35);
+}
+function sndSwallow(text){
+  if(!audioOn)return;
+  const t0=AC.currentTime;
+  if(t0-lastSw<0.15)return; lastSw=t0;
+  if(whispers>=2){ gulpThump(0.16); return; }        // 쏟아질 땐 목넘김만 — "고를 새도 없이"
+  if(!whisperBuf)whisperBuf=noiseBuf(1.5,false);
+  const words=String(text||'').toLowerCase().split(/[^a-z]+/).filter(w=>w).slice(0,7);
+  if(!words.length){ gulpThump(0.18); return; }
+  whispers++;
+  const phrase=AC.createGain();phrase.gain.value=1;
+  const lp=AC.createBiquadFilter();lp.type='lowpass';
+  const total=0.06+words.length*0.155;
+  lp.frequency.setValueAtTime(1600,t0);
+  lp.frequency.exponentialRampToValueAtTime(430,t0+total);   // 살이 점점 두꺼워진다
+  phrase.connect(lp);lp.connect(master);
+  let t=t0+0.02;
+  words.forEach((w,wi)=>{
+    const sink=1-0.45*(wi/Math.max(1,words.length-1||1));    // 내려갈수록 가라앉는 음절
+    const v=(w.match(/[aeiou]/)||['e'])[0];
+    const F=FORMANT[v];
+    const dur=0.05+Math.min(0.09,w.length*0.012);
+    for(const [ff,fg] of [[F[0],34],[F[1],19]]){
+      const n=AC.createBufferSource();n.buffer=whisperBuf;n.loop=true;
+      n.playbackRate.value=0.9+Math.random()*0.2;
+      const bp=AC.createBiquadFilter();bp.type='bandpass';bp.Q.value=5;
+      bp.frequency.value=ff*sink*(0.94+Math.random()*0.12);
+      const g=AC.createGain();
+      g.gain.setValueAtTime(0.0001,t);
+      g.gain.exponentialRampToValueAtTime(fg*(0.45+0.55*sink),t+0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+      n.connect(bp);bp.connect(g);g.connect(phrase);
+      n.start(t);n.stop(t+dur+0.03);
+    }
+    t+=dur+0.028+Math.random()*0.05;
+  });
+  // 속삭임이 끝나는 자리 — 목넘김
+  const o=AC.createOscillator(),g2=AC.createGain();
+  o.type='sine';o.frequency.setValueAtTime(88,t);o.frequency.exponentialRampToValueAtTime(42,t+0.22);
+  g2.gain.setValueAtTime(0.0001,t);g2.gain.exponentialRampToValueAtTime(0.18,t+0.03);
+  g2.gain.exponentialRampToValueAtTime(0.0001,t+0.30);
+  o.connect(g2);g2.connect(master);o.start(t);o.stop(t+0.35);
+  setTimeout(()=>{whispers=Math.max(0,whispers-1);},(t-t0+0.45)*1000);
 }
 // 구역 — 두 번의 짧은 수축. 올라오다 만다.
 function sndGag(){
@@ -739,8 +782,8 @@ function onReading(m){
     engRaw=txt.length>180?txt.slice(0,180)+'…':txt; engRawAt=performance.now();
     // 세상의 말이 관으로 들어간다 — 단어 단위로 내려간다
     swallowText(txt,7);   // 문장 통째로 삼킨다 — 역겨움은 문장에 있다
+    sndSwallow(txt);      // 그 문장이 살 너머에서 웅얼거린다
   }
-  sndSwallow();
 }
 function onVerdict(m){
   toxT=Math.min(1,(m.toxin||0)/7);
@@ -770,7 +813,7 @@ function onVerdict(m){
 }
 function onGulp(m){
   swallowText(m.text,3);
-  smallT=`씹지 않고, ${sub}`; sndSwallow(); }
+  smallT=`씹지 않고, ${sub}`; sndSwallow(m.text); }
 
 // ── 루프 ──
 let last=0,started=0;
