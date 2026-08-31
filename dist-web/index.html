@@ -22,6 +22,11 @@ const glc=document.getElementById('gl');
 const tc=document.createElement('canvas'), T=tc.getContext('2d');
 // 증거의 층 — 유리를 통과하지 않는다. 작품의 목소리가 아니라 기계의 기록.
 const evc=document.getElementById('ev'), E=evc.getContext('2d');
+// 하루가 남기는 두 층 — 프레임마다 지우지 않는다.
+// 위에 가라앉아 다시는 나가지 않는 것 (앙금), 유리 이쪽 면에 흘러내린 것 (게움).
+const sedC=document.createElement('canvas'), SD=sedC.getContext('2d');
+const glsC=document.createElement('canvas'), GL2=glsC.getContext('2d');
+let sedMass=0, glsN=0;
 // 해상도 다이얼 — 현장에서 무거우면 ?dpr=1 (또는 0.75)로 바로 조인다
 const DPRCAP=parseFloat(new URLSearchParams(location.search).get('dpr')??'1.4');
 let DPR;
@@ -29,7 +34,8 @@ function resize(){DPR=Math.min(DPRCAP,devicePixelRatio||1);
   glc.width=tc.width=evc.width=Math.round(innerWidth*DPR);
   glc.height=tc.height=evc.height=Math.round(innerHeight*DPR);
   glc.style.width=evc.style.width=innerWidth+'px';
-  glc.style.height=evc.style.height=innerHeight+'px';}
+  glc.style.height=evc.style.height=innerHeight+'px';
+  sedC.width=glsC.width=glc.width;sedC.height=glsC.height=glc.height;}
 resize();
 const W=()=>tc.width,H=()=>tc.height;
 
@@ -162,6 +168,77 @@ function bodySDF(qx,qy,t){
   const rad=(side<0?radL:radR)+peri;
   return Math.abs(side)-rad;
 }
+// ── 하루 ──
+// 이 화면은 5분이 아니라 하루를 산다. 아침에 온 사람과 저녁에 온 사람은
+// 같은 작품이 아니라 같은 몸의 다른 때를 본다. 되돌아가는 것은 없다.
+const DAY_TAU=2.5*3600e3;                 // 병이 깊어지는 시간상수
+const DAY_FORCE=parseFloat(new URLSearchParams(location.search).get('day')??'-1');
+// ?aged=0.8 — 하루가 그만큼 지난 몸을 즉시 만든다 (현장 확인용. 8시간을 기다릴 수 없으므로)
+const AGED=parseFloat(new URLSearchParams(location.search).get('aged')??'0');
+let dayT=0;                                // 0=아침, 1=저녁
+// 다 삭은 것은 없어지지 않는다. 형체를 잃고 바닥에 눌어붙어 층이 된다.
+// 캔버스에 얼룩을 찍는 대신 바닥의 높이로 쌓는다 — 그래야 몸의 모양을 따른다.
+const SEDN=96;                        // 위 바닥을 가로지르는 기둥 수
+const sedH=new Float32Array(SEDN);    // 각 기둥에 쌓인 높이 (몸 좌표)
+function settle(x,y){
+  const [qx]=toBody(x,y);
+  const c=Math.round((qx+0.44)/0.88*(SEDN-1));
+  // 한 점에 탑이 서지 않게 이웃으로 흘러 퍼진다
+  for(let k=-3;k<=3;k++){
+    const i=c+k; if(i<0||i>=SEDN) continue;
+    sedH[i]+=0.000052*Math.exp(-k*k*0.35);
+  }
+  sedMass=Math.min(1,sedMass+0.000016);
+}
+// 쌓인 층은 흐른다 — 봉우리가 무너져 평평해진다
+function slumpSed(dt){
+  const k=Math.min(0.45,dt*3.2);
+  for(let p=0;p<2;p++){
+    for(let i=1;i<SEDN-1;i++){
+      const avg=(sedH[i-1]+sedH[i+1])*0.5;
+      sedH[i]+=(avg-sedH[i])*k*(avg<sedH[i]?1:0.35);   // 봉우리는 무너지고 골은 천천히 찬다
+    }
+  }
+  sedH[0]*=0.985; sedH[SEDN-1]*=0.985;                 // 가장자리는 벽을 타고 흘러내린다
+}
+// 몸 안에 그린다 — 셰이더가 이걸 굴절시켜 본다
+// 높이장을 1픽셀 높이 텍스처로 실어 보낸다 — 몸의 곡면 안쪽에서만 쌓이도록
+const sedPix=new Uint8Array(SEDN*4);
+function sedToPixels(){
+  for(let i=0;i<SEDN;i++){
+    const v=Math.max(0,Math.min(1,sedH[i]/0.075));
+    sedPix[i*4]=Math.round(v*255); sedPix[i*4+3]=255;
+  }
+}
+// 게운 것은 화면 밖으로 사라지지 않는다 — 유리 이쪽 면을 타고 흘러내린다.
+// 「너희 신발 위에」. 관객은 유리 밖에 안전하게 서 있지 않다.
+function glassStain(x){
+  if(glsN>96 || Math.random()>0.00013+dayT*0.00015) return;
+  glsN++; glassStainForce(x);
+}
+function glassStainForce(x){
+  const h=H(), w=W();
+  // 입에서 튄 것이 유리에 닿아 흘러내린다 — 곧은 선이 아니라 비틀리며 내려가 마른다
+  const y0=h*(0.005+Math.random()*0.06);
+  const r0=Math.random();
+  const len=h*(0.05+r0*r0*0.52)*(0.5+dayT*0.7);
+  const a=0.020+Math.random()*0.022;
+  const seg=Math.max(6,Math.round(len/(h*0.02)));
+  let cx=x, cy=y0, wid=h*(0.0022+Math.random()*0.0040);
+  const drift=(Math.random()-0.5)*h*0.004;
+  GL2.fillStyle=`rgba(198,152,134,${a.toFixed(3)})`;
+  for(let i=0;i<seg;i++){
+    const u=i/seg;
+    cx+=drift+Math.sin(i*0.9+x*0.01)*h*0.0016;
+    cy+=len/seg;
+    const ww=wid*(1-u*0.55)*(0.8+0.4*n2js(i*1.7,x*0.01));
+    GL2.beginPath();GL2.ellipse(cx,cy,ww,len/seg*0.75,0,0,6.2832);GL2.fill();
+  }
+  // 방울이 멈춘 자리 — 마르면서 가장자리가 진해진다
+  GL2.globalAlpha=0.7;
+  GL2.beginPath();GL2.ellipse(cx,cy,wid*1.5,wid*2.1,0,0,6.2832);GL2.fill();
+  GL2.globalAlpha=1;
+}
 const letters=[];                      // 소화 중인 낱글자들
 // 문장을 통째로 삼킨다 — 역겨움은 낱말이 아니라 문장에 있다.
 // 한 줄로 붙어 내려가다, 위(胃)에서 낱글자로 부서진다.
@@ -283,7 +360,9 @@ function stepLetters(dt,t){
       if(qy>0.10) L.bond=Math.max(0,L.bond-0.010);     // 위에서만 벽 충돌로 조금 느슨해진다
     }
     // ── 위 바닥 — 삼킨 것이 여기 쌓인다 ──
-    const floorQY=0.405+0.006*Math.sin(t*0.43);   // 화면 밑변에 더미가 잘리지 않는 높이
+    // 바닥은 그 자리에 쌓인 앙금만큼 올라온다 — 저녁이면 담을 자리가 줄어 더 자주 게운다
+    const si=Math.max(0,Math.min(SEDN-1,Math.round((qx0+0.44)/0.88*(SEDN-1))));
+    const floorQY=0.405-Math.min(0.075,sedH[si])+0.006*Math.sin(t*0.43);
     if(qy>floorQY && !(canalDir<0&&purge>0.02)){
       const [,fy]=toScreen(qx,floorQY);
       L.y=fy; if(L.vy>0){ L.vy*=-0.06; }              // 젖은 바닥 — 튀지 않는다
@@ -292,7 +371,7 @@ function stepLetters(dt,t){
     // ── 위액 수면 — 문장은 터지지 않는다. 떠서 표류하다 젖어 늘어진다. ──
     const depth=qy-poolQY;                                // >0 = 수면 아래
     const erupt=(canalDir<0&&purge>0.02);
-    if(depth>0.0 && !erupt) L.dig=(L.dig||0)+dt;      // 위산에 잠긴 시간 = 삭은 정도
+    if(depth>0.0 && !erupt) L.dig=(L.dig||0)+dt*(1-dayT*0.42);  // 저녁엔 삭이지 못한다
     if(depth>-0.02){
       // 수면 장력: 문장이 물 위에 뜬다
       const sink=Math.max(0,depth);
@@ -319,7 +398,11 @@ function stepLetters(dt,t){
     if(L.size<h*0.030 && L.ch===L.ch.toUpperCase()) L.ch=L.ch.toLowerCase();
     // 오래 표류한 것부터 녹아 사라진다
     if(depth>0.02){ L.life-=dt*0.028; }   // 오래 남아 쌓인다
-    if(L.life<=0 || L.size<h*0.010 || L.y>h*1.2 || L.y<-h*0.25){ letters.splice(i,1); }
+    if((L.dig||0)>9 || L.life<=0 || L.size<h*0.010 || L.y>h*1.2 || L.y<-h*0.25){
+      if(L.y<-h*0.25) glassStain(L.x);          // 게워져 나갔다 — 유리에 흘러내린다
+      else settle(L.x,L.y);                     // 삭았다 — 글자이기를 그만두고 바닥에 남는다
+      letters.splice(i,1);
+    }
   }
   // ── 글자끼리 부딪힌다 — 공간 해싱으로 이웃만 검사 ──
   const cell=h*0.048, grid=new Map();
@@ -357,7 +440,7 @@ function stepLetters(dt,t){
   // ── 소화불량: 위에 쌓인 것이 임계를 넘으면 몸이 못 견디고 역류한다 ──
   let piled=0;
   for(const L of letters){ if(toBody(L.x,L.y)[1]>poolQY-0.05) piled++; }
-  stomachLoad+=((piled/60)-stomachLoad)*Math.min(1,dt*1.6);   // 55자 넘게 쌓이면 소화불량
+  stomachLoad+=((piled/105)-stomachLoad)*Math.min(1,dt*1.6);   // 55자 넘게 쌓이면 소화불량
   if(stomachLoad>1 && performance.now()>refluxUntil+4000){
     refluxUntil=performance.now()+REFLUX_MS;                 // 관이 뒤집힌다 (과정이 보이게 길게)
     purge=Math.max(purge,0.85);
@@ -389,6 +472,7 @@ function drawType(dt){
   T.fillStyle='#000';T.fillRect(0,0,W(),H());
   T.textBaseline='alphabetic';
   const t=(performance.now()-started)/1000;
+  slumpSed(dt); sedToPixels();           // 하루가 남긴 앙금 — 지워지지 않는다
   stepLetters(Math.min(dt,0.05),t);
   drawLetters();
 }
@@ -408,6 +492,7 @@ const POEM=[
 // 시 전문이 늘 서 있다. 아무것도 바뀌지 않는다 — 관객이 제 속도로 읽는다.
 function drawEvidence(now){
   E.clearRect(0,0,W(),H());
+  E.drawImage(glsC,0,0);                 // 유리에 흘러내린 것 — 시 위를 지나간다
   // 폭도 함께 본다 — 세로로 긴 화면에서 시가 넘치지 않게
   const h=H(), fs=Math.round(Math.min(h*0.0182, W()*0.0125)), lh=fs*1.82, gap=lh*0.85;
   E.font=F_KO.replace('600','500').replace('%',fs);E.textAlign='left';E.textBaseline='alphabetic';
@@ -426,6 +511,7 @@ const VS=`attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}`;
 const FS=`precision highp float;
 uniform vec2 uRes;uniform float uT,uTox,uFat,uPur,uBre,uClar;
 uniform sampler2D uWords;   // R=한국어 살, G=관 속 영어
+uniform sampler2D uSed;     // 바닥에 쌓인 앙금의 높이 (가로 1줄)
 // A7 몸 — 비대칭 위(대만곡/소만곡), 분문 골, 산의 수면, lost-and-found 윤곽. 게움=heave.
 float h2(vec2 n){return fract(sin(dot(n,vec2(127.1,311.7)))*43758.5453);}
 float n2(vec2 x){vec2 i=floor(x),f=fract(x);vec2 u=f*f*(3.-2.*f);
@@ -438,7 +524,9 @@ void main(){
   float ca=cos(0.06),sa=sin(0.06);
   vec2 q=vec2(q0.x*ca-q0.y*sa,q0.x*sa+q0.y*ca);   // 미세한 기울기
   float t=uT, tox=clamp(uTox,0.,1.), heave=clamp(uPur,0.,1.);
-  float breathe=0.5+0.048*sin(t*1.46);             // 사람의 안정호흡 ~4.3s — 복도에서 보이는 진폭
+  float ill=clamp(uFat,0.,1.);                     // 하루가 깊어진 정도 — 되돌아가지 않는다
+  // 앓는 호흡: 얕아지고 빨라진다
+  float breathe=0.5+(0.048-0.020*ill)*sin(t*(1.46+ill*0.62));
   float spasm=heave*0.09*sin(q.y*9.0-t*10.0)*n2(vec2(q.y*8.0,t*3.0));
   float peri=0.030*sin(q.y*6.0-t*1.1)+spasm;       // 연동 + 게움 경련
   float bend=0.10*sin(q.y*2.1+t*0.25)-0.02+heave*0.03*sin(t*7.0);
@@ -464,11 +552,23 @@ void main(){
     col=vec3(0.90,0.91,0.87)*en;
     float below=smoothstep(poolY,poolY+0.05,q.y);
     float murk=0.4+0.6*fb(uv*vec2(6.,9.)+vec2(0.,-t*0.12));
-    col+=vec3(0.15,0.045,0.028)*below*murk*(1.0+tox+heave);         // 산성 murk
+    col+=vec3(0.15,0.045,0.028)*below*murk*(1.0+tox+heave+ill*0.85);  // 산성 murk — 저녁일수록 탁하다
     float se=(q.y-poolY)/0.010;
     float surf=exp(-se*se)*smoothstep(0.3,0.75,depth);
     float glint=smoothstep(0.45,0.85,fb(vec2(q.x*22.0,t*0.5)));
     col+=vec3(0.30,0.15,0.09)*surf*glint*0.8;                       // 깨진 수면 광택
+    // 앙금 — 형체를 잃은 것들이 바닥에 눌어붙어 빛을 먹는다.
+    // 벽에 붙지 않고 안쪽에만 고이며, 표면은 고르지 않다.
+    float sx=clamp((q.x+0.44)/0.88,0.,1.);
+    float sh=texture2D(uSed,vec2(sx,0.5)).r*0.075;
+    if(sh>0.0008){
+      float rough=(fb(vec2(q.x*18.0,7.3))-0.5)*0.011+(fb(vec2(q.x*70.0,3.1))-0.5)*0.0035;
+      float sedTop=0.405-sh+rough;
+      float inSed=smoothstep(sedTop-0.004,sedTop+0.008,q.y)*smoothstep(0.0,0.22,depth);
+      float grain=0.40+0.60*fb(vec2(q.x*110.0,q.y*150.0));
+      col=mix(col,vec3(0.042,0.026,0.019)*grain,clamp(inSed,0.,1.));
+      col+=vec3(0.085,0.044,0.026)*inSed*pow(grain,4.0)*1.1;   // 알갱이 몇 개만 빛을 받는다
+    }
     float wall=smoothstep(0.72,0.0,depth);
     float mottle=0.55+0.45*fb(vec2(q.x*14.0,q.y*10.0)+t*0.07);
     col+=vec3(0.34,0.09,0.06)*wall*foldSh*mottle*(0.6+tox*1.2+heave*0.8);  // 주름진 점막
@@ -512,6 +612,11 @@ gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW
 const pl=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,2,gl.FLOAT,false,0,0);
 const U=n=>gl.getUniformLocation(pr,n);
 // 말의 평면 텍스처
+const sedTex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,sedTex);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
 const wordTex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,wordTex);
 [[gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE],
  [gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR]]
@@ -616,7 +721,10 @@ function loop(now){
   // 소화: 천천히 맑아졌다가 아주 천천히 다시 흐려진다
   clar+=(clarT-clar)*Math.min(1,dt*(clarT>clar?0.9:0.30));
   clarT*=Math.pow(0.90,dt);
-  breath=Math.sin((now-started)/1000*0.55)*0.5+0.5;
+  // 하루가 몸을 깊게 만든다 — 되돌아가지 않는다
+  dayT=DAY_FORCE>=0?DAY_FORCE:(1-Math.exp(-(now-started)/DAY_TAU));
+  fatigue=dayT;
+  breath=Math.sin((now-started)/1000*(0.55+dayT*0.22))*0.5+0.5;
   canalDir=(now<refluxUntil)?-1:1;   // 게움 동안 관이 역류한다
   if(droneG)droneG.gain.value=0.035+toxin*0.05+purge*0.05;
   drawType(dt);
@@ -624,6 +732,9 @@ function loop(now){
   gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,wordTex);
   gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,tc);
   gl.uniform1i(U('uWords'),0);
+  gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,sedTex);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,SEDN,1,0,gl.RGBA,gl.UNSIGNED_BYTE,sedPix);
+  gl.uniform1i(U('uSed'),1);
   gl.viewport(0,0,glc.width,glc.height);
   gl.uniform2f(U('uRes'),glc.width,glc.height);gl.uniform1f(U('uT'),(now-started)/1000);
   gl.uniform1f(U('uTox'),toxin);gl.uniform1f(U('uFat'),fatigue);
@@ -698,7 +809,7 @@ async function startCorpus(url){
     for(const it of shuffled()){
       const venom=Math.max(0,Math.min(3,it.venom??2));
       handleMsg({t:'reading',text:it.text});
-      poison+=0.022+venom*0.027;      // 대략 15~20초에 한 번 게우는 속도 — 삭을 틈은 준다
+      poison+=(0.017+venom*0.021)*(1+dayT*1.35);   // 아침 ~25초, 저녁 ~11초에 한 번
       handleMsg({t:'state',pressure:Math.min(1,poison)});
 
       // 소화불량이 임계를 넘으면 몸이 게운다 — 원인이 있는 게움
@@ -732,6 +843,20 @@ function connect(){
   ws.onopen=()=>{clearTimeout(timer);done=true;};
   ws.onmessage=(ev)=>{ let m; try{m=JSON.parse(ev.data);}catch{return;} handleMsg(m); };
   ws.onerror=()=>{clearTimeout(timer);fallback();};
+}
+// 하루치를 미리 앉혀 저녁 몸을 즉시 본다
+if(AGED>0){
+  dayT=DAY_FORCE>=0?DAY_FORCE:AGED;      // 자국의 길이는 그 시각의 몸을 따른다
+  const w=W();
+  // 그 시각까지 쌓였을 층을 곧바로 만든다 (관 축이 두텁고 가장자리로 흘러내린 모양)
+  for(let i=0;i<SEDN;i++){
+    const qx=-0.44+i/(SEDN-1)*0.88, u=(qx+0.02)/0.30;
+    sedH[i]=AGED*0.075*Math.exp(-u*u*0.9)*(0.82+0.36*n2js(i*0.31,4.7));
+  }
+  for(let i=0;i<160;i++) slumpSed(0.05);
+  sedMass=AGED;
+  glsN=Math.round(AGED*92);
+  for(let i=0;i<glsN;i++) glassStainForce(w*(0.42+(Math.random()-0.5)*0.30));
 }
 connect();
 addEventListener('resize',resize);
