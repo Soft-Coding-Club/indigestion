@@ -1,0 +1,12 @@
+import { chromium } from "playwright";
+const b=await chromium.launch({channel:'chrome',headless:false});
+const pg=await b.newPage({viewport:{width:1600,height:900}});
+const errs=[]; pg.on("pageerror",e=>errs.push(String(e)));
+await pg.goto("https://indigestion.vercel.app",{waitUntil:"load"});
+await pg.evaluate(()=>{window.__p=[];setInterval(()=>window.__p.push(letters.length),1000);});
+await pg.waitForTimeout(45000);
+const r=await pg.evaluate(()=>({p:window.__p,n:letters.length}));
+console.log("빈 화면",r.p.filter(x=>!x).length,"/",r.p.length,"초 · 평균",Math.round(r.p.reduce((a,b)=>a+b,0)/r.p.length),"· 최대",Math.max(...r.p));
+console.log("에러:",errs.length?errs.slice(0,3):"없음");
+await pg.screenshot({path:"out/prod.png"});
+await b.close(); process.exit(0);

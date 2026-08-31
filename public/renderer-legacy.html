@@ -1,0 +1,988 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>소화불량</title>
+<!-- 오프라인 번들 — 전시장 네트워크가 죽어도 서체와 이빨(BPE)은 로컬에 있다 -->
+<link href="/vendor/noto-serif-kr.css" rel="stylesheet">
+<script src="/vendor/cl100k_base.js"></script>
+<style>
+  html,body{margin:0;padding:0;background:#0A0705;height:100%;overflow:hidden;cursor:none}
+  canvas{display:block;width:100vw;height:100vh;object-fit:contain;cursor:none}
+</style>
+</head>
+<body>
+<canvas id="c" width="1600" height="900"></canvas>
+<script>
+const cv = document.getElementById("c");
+const ctx = cv.getContext("2d");
+const W = 1600, H = 900;
+const SCALE = W / 1280;
+const MODEL_ID = "deepseek-ai/DeepSeek-V4-Flash-0731";
+const CTX_MAX = 1048576;
+
+// 서체 — 세 개의 목소리: 한국어(문학), 영어(책), 모노(증거)
+const F_KO = "'Noto Serif KR', 'Apple SD Gothic Neo', serif";
+const F_EN = "'Iowan Old Style', Palatino, Georgia, serif";
+const F_MONO = "ui-monospace, Menlo, monospace";
+const F_GROT = "'Helvetica Neue', Helvetica, Arial, sans-serif"; // 콘크리트 — 세상의 언어
+
+let frameImg = null;
+let state = { eaten: 0, toxin: 0, fatigue: 0, tokens: 0 };
+let nav = { url: "", title: "" };
+let stage = null;     // 소화의 극장: ingest→read→chew→form→hold→settle
+let thought = null;   // {text,born} — 지금의 생각, 자막처럼
+const BAR_H = 34;     // 하단 위장(context) 바
+const scars = [];     // 게움의 흉터 (bar 위 x좌표)
+const PANEL_W = 384;  // 왼쪽 로그인 창을 덮는 내면 패널
+const drops = [];     // 독한 댓글에서 떨어지는 핏방울
+let think = "";       // 날것의 사고 스트림 (reasoning tokens)
+let journey = [];     // 지나온 곳 — 방문한 채널들
+let movement = "정독"; // 지금의 악장
+const ROMAN = { "배회": "Ⅰ", "정독": "Ⅱ", "폭식": "Ⅲ", "되새김": "Ⅳ", "침묵": "Ⅴ" };
+const gulps = [];     // 폭식 — 씹지 않고 삼켜지는 말들
+const pulses = [];    // 실제 토큰 도착의 맥박 (연출 아님)
+let burn = null;      // {rect, until} — 역한 댓글이 타는 자리
+let subliminal = null; // {word, until} — 독한 단어의 1프레임 섬광 (Se7en)
+let bornAt = 0;
+let barFill = 0;
+let cursor = { x: 800, y: 450, tx: 800, ty: 450 };
+const trail = [];     // 시선의 궤적
+let poison = { cur: 0, target: 0 };
+let gag = { until: 0 };
+const gagChars = [];
+let purge = null;     // {start, matter}
+const jet = [];       // 분출 입자
+const debris = [];    // 유리에 남은 게워진 언어
+let blackout = { until: 0 };
+let shake = { mag: 0, until: 0 };
+
+const ghost = document.createElement("canvas");
+ghost.width = 1280; ghost.height = 720;
+const gtx = ghost.getContext("2d");
+
+const ws = new WebSocket(`ws://${location.host}/ws`);
+ws.onmessage = (ev) => {
+  if (!bornAt) bornAt = Date.now();
+  const m = JSON.parse(ev.data);
+  if (m.t === "frame") {
+    const img = new Image();
+    img.onload = () => {
+      frameImg = img;
+      gtx.globalCompositeOperation = "destination-out";
+      gtx.globalAlpha = 0.05;
+      gtx.fillRect(0, 0, 1280, 720);
+      gtx.globalCompositeOperation = "source-over";
+      gtx.globalAlpha = 0.16;
+      gtx.drawImage(img, 0, 0, 1280, 720);
+      gtx.globalAlpha = 1;
+    };
+    img.src = "data:image/jpeg;base64," + m.b64;
+  } else if (m.t === "state") { state = m; if (m.pressure != null) poison.target = Math.min(1, m.pressure); }
+  else if (m.t === "nav") nav = m;
+  else if (m.t === "cur") { cursor.tx = m.x * SCALE; cursor.ty = m.y * SCALE; }
+  else if (m.t === "reading") startStage(m.box, m.text, m.memory);
+  else if (m.t === "chew") { if (stage) stage.chewRequested = true; else startStage(m.box, m.text, m.memory); }
+  else if (m.t === "movement") movement = m.name || "정독";
+  else if (m.t === "gulp") {
+    const r = m.box ? mapRect(m.box) : { x: W / 2, y: H / 2, w: 300, h: 30 };
+    const words = (m.text || "").split(/\s+/).filter(Boolean).slice(0, 9);
+    words.forEach((w, i) => {
+      gulps.push({
+        str: w,
+        sx: r.x + (i / Math.max(1, words.length - 1)) * Math.min(r.w, 500),
+        sy: r.y + Math.random() * Math.max(8, r.h),
+        t0: performance.now() + i * 45,
+      });
+    });
+    while (gulps.length > 60) gulps.shift();
+  }
+  else if (m.t === "inner") thought = { text: m.text, born: performance.now() };
+  else if (m.t === "think_reset") think = "";
+  else if (m.t === "think") {
+    think += m.d;
+    if (think.length > 2400) think = think.slice(-2400);
+    pulses.push(performance.now());
+    if (pulses.length > 60) pulses.shift();
+  }
+  else if (m.t === "journey") journey = m.list || [];
+  else if (m.t === "verdict") onVerdict(m);
+};
+
+function onVerdict(m) {
+  const box = m.box; // 혈주는 state.pressure가 몬다 — 독과 과식, 두 압력의 최대치
+
+  // 소화된 것은 한국어가 된다 — 게워낸 것만 영어로 남는다 (무대에서 재조립)
+  if (stage) {
+    stage.pending = m;
+    stage.hesitations = m.hesitations || [];
+    stage.fake = typeof m.fake === "boolean" ? m.fake : null;
+    stage.fakeP = m.fakeP || 0;
+  }
+  if (m.marginalia) thought = { text: m.marginalia, born: performance.now() };
+
+  // 역한 댓글: 그 자리가 타오르고, 독이 방울져 떨어진다
+  if ((m.nourishment ?? 0) <= -1 && box) {
+    const r = mapRect(box);
+    burn = { rect: r, until: performance.now() + 1600 };
+    const nDrop = m.nourishment <= -2 ? 10 : 5;
+    for (let i = 0; i < nDrop; i++) {
+      drops.push({
+        x: r.x + r.w * (0.2 + Math.random() * 0.6),
+        y: r.y + r.h * 0.7,
+        vy: 1.5 + Math.random() * 2.5,
+        r: 2.5 + Math.random() * 3,
+        delay: performance.now() + i * 110,
+      });
+    }
+  }
+
+  // 순수한 독은 그 단어가 망막에 꽂힌다 — 85ms
+  if ((m.nourishment ?? 0) <= -2 && m.text) {
+    const words = m.text.split(/\s+/).filter((w) => w.length > 2);
+    const w = words.sort((a, b) => b.length - a.length)[0];
+    if (w) subliminal = { word: w.slice(0, 14).toUpperCase(), until: performance.now() + 85 };
+  }
+
+  if (m.v === "GAG") {
+    gag = { until: performance.now() + 700 };
+    shake = { mag: 4, until: performance.now() + 500 };
+    const surf = H - BAR_H;
+    const chars = (m.text || "쓴물").replace(/\s+/g, "");
+    for (let i = 0; i < 7; i++) {
+      gagChars.push({
+        ch: chars[Math.floor(Math.random() * chars.length)] || "·",
+        x: W * 0.30 + Math.random() * W * 0.4,
+        y0: surf + 6, t0: performance.now() + i * 60,
+        rise: 34 + Math.random() * 40,
+      });
+    }
+  } else if (m.v === "PURGE") {
+    purge = { start: performance.now(), matter: (m.matter || []).join(" ") };
+    shake = { mag: 6, until: performance.now() + 800 };
+  }
+}
+
+function mapRect(b) {
+  return { x: b.x * SCALE, y: b.y * SCALE, w: b.width * SCALE, h: b.height * SCALE };
+}
+
+// ── 소화의 극장 ──
+const STAGE_X = PANEL_W + 168;
+const STAGE_W = 880;
+// 목구멍은 왼쪽 — 씹힌 말은 내면 패널 쪽으로 빨려 들어간다
+const GULLET = { x: PANEL_W + 92, y: H - BAR_H - 190 };
+
+function layoutWords(text, font, x0, y0, maxW, lh, maxLines) {
+  ctx.font = font;
+  const words = text.split(/\s+/).filter(Boolean);
+  const out = [];
+  let x = x0, y = y0, lines = 0;
+  for (const w of words) {
+    const ww = ctx.measureText(w + " ").width;
+    if (x + ww > x0 + maxW) {
+      x = x0; y += lh; lines += 1;
+      if (maxLines && lines >= maxLines) break;
+    }
+    out.push({ str: w, x, y, w: ww });
+    x += ww;
+  }
+  return out;
+}
+
+// 각 행을 측정 폭 안에서 중앙 정렬 — 조판의 축
+function centerLines(words, x0, maxW) {
+  const byY = new Map();
+  for (const w2 of words) {
+    if (!byY.has(w2.y)) byY.set(w2.y, []);
+    byY.get(w2.y).push(w2);
+  }
+  for (const line of byY.values()) {
+    const last = line[line.length - 1];
+    const shift = (maxW - (last.x + last.w - x0)) / 2;
+    for (const w2 of line) w2.x += shift;
+  }
+}
+
+function startStage(box, text, memory) {
+  const r = box ? mapRect(box) : { x: STAGE_X, y: 300, w: 640, h: 60 };
+  const font = `700 34px ${F_GROT}`;
+  const words = layoutWords(text, font, STAGE_X, 190, STAGE_W, 52, 6);
+  centerLines(words, STAGE_X, STAGE_W);
+  const perRow = 7;
+  const rowH = Math.max(13, Math.min(22, r.h / Math.max(1, Math.ceil(words.length / perRow))));
+  words.forEach((w2, i) => {
+    w2.sx = r.x + (i % perRow) * (r.w / perRow);
+    w2.sy = r.y + Math.floor(i / perRow) * rowH;
+  });
+  stage = {
+    phase: "ingest", t0: performance.now(), font, srcRect: r, memory: !!memory,
+    words, sweepI: -1, sweepNext: 0,
+    chewRequested: false, chewT0: 0,
+    frags: [], pending: null,
+    korean: null, verdict: null, formT0: 0, holdUntil: 0, settleT0: 0,
+  };
+}
+
+function explodeStage(now) {
+  // 씹기 = 토크나이즈. 진짜 BPE 경계로 부서진다 (cl100k — 개념 시연용 실제 토크나이저)
+  const enc = window.GPTTokenizer_cl100k_base;
+  const frags = [];
+  ctx.font = stage.font;
+  for (const w2 of stage.words) {
+    let pieces = null;
+    if (enc) {
+      try {
+        const ids = enc.encode(w2.str);
+        pieces = ids.map((id) => ({ str: enc.decode([id]), id }));
+      } catch {}
+    }
+    if (!pieces) pieces = [...w2.str].map((ch) => ({ str: ch, id: null }));
+    let cx2 = w2.x;
+    for (const p of pieces) {
+      const pw = ctx.measureText(p.str).width;
+      frags.push({
+        ch: p.str, id: p.id, x: cx2, y: w2.y,
+        vx: (Math.random() - 0.5) * 5, vy: (Math.random() - 0.5) * 4,
+        rot: 0, vr: (Math.random() - 0.5) * 0.22, fall: false, tx: 0, ty: 0,
+      });
+      cx2 += pw;
+    }
+  }
+  while (frags.length > 200) frags.splice(Math.floor(Math.random() * frags.length), 1);
+  stage.frags = frags;
+  stage.phase = "chew";
+  stage.chewT0 = now;
+}
+
+function applyResolve(now) {
+  const m = stage.pending;
+  stage.pending = null;
+  stage.verdict = m.v;
+  if (m.v === "PURGE" || !m.translation) {
+    // 조립 실패 — 부서진 영어가 단어째로 게워진다. 크고, 무겁게.
+    for (const w2 of stage.words) {
+      jet.push({
+        ch: w2.str.toUpperCase(), x: w2.x, y: w2.y,
+        vx: (Math.random() - 0.5) * 9, vy: -(11 + Math.random() * 14),
+        size: 42 + Math.random() * 42, rot: (Math.random() - 0.5) * 0.8,
+        alpha: 0.95, stuck: false, slideVy: 0.1 + Math.random() * 0.3,
+      });
+    }
+    while (jet.length > 70) jet.shift();
+    stage = null;
+    return;
+  }
+  const t = m.translation.slice(0, 220);
+  const font = `600 52px ${F_KO}`;
+  const words = layoutWords(t, font, STAGE_X + 20, 300, STAGE_W - 40, 76, 4);
+  // 브루탈리스트 조판 — 각 행의 글자를 벌려 양끝을 측정폭에 정확히 맞춘다
+  ctx.font = font;
+  const glyphs = [];
+  const byY = new Map();
+  for (const w2 of words) {
+    if (!byY.has(w2.y)) byY.set(w2.y, []);
+    for (const ch of w2.str) byY.get(w2.y).push(ch);
+  }
+  const measure = STAGE_W - 40;
+  for (const [ly, chars] of byY) {
+    const natural = chars.reduce((s, ch) => s + ctx.measureText(ch).width, 0);
+    const gap = chars.length > 3
+      ? Math.max(0, Math.min(30, (measure - natural) / (chars.length - 1)))
+      : 0;
+    let cx2 = chars.length > 3 ? STAGE_X + 20 : STAGE_X + 20 + (measure - natural) / 2;
+    for (const ch of chars) {
+      glyphs.push({ ch, x: cx2, y: ly });
+      cx2 += ctx.measureText(ch).width + gap;
+    }
+  }
+  stage.korean = { glyphs, font };
+  // 조각마다 목적지 — 구역질이면 일부는 끝내 도착하지 못한다
+  stage.frags.forEach((fg, i) => {
+    const g = glyphs.length ? glyphs[i % glyphs.length] : { x: GULLET.x, y: GULLET.y };
+    fg.tx = g.x; fg.ty = g.y;
+    fg.fall = m.v === "GAG" && Math.random() < 0.16;
+  });
+  stage.phase = "form";
+  stage.formT0 = now;
+}
+
+function stepStage(now) {
+  const s2 = stage;
+  if (s2.phase === "ingest") {
+    if (now - s2.t0 > 700) {
+      s2.phase = "read";
+      s2.sweepNext = now + 250;
+    }
+  } else if (s2.phase === "read") {
+    // 판정이 먼저 와도 서두르지 않는다 — 커서가 떠난 뒤에만 빨리 감는다
+    const speed = s2.pending && s2.chewRequested ? 0.4 : 1;
+    while (s2.sweepI < s2.words.length - 1 && now > s2.sweepNext) {
+      s2.sweepI += 1;
+      s2.sweepNext = now + (110 + s2.words[s2.sweepI].str.length * 26) * speed;
+    }
+    if (s2.sweepI >= s2.words.length - 1 && s2.chewRequested) explodeStage(now);
+  } else if (s2.phase === "chew") {
+    for (const fg of s2.frags) {
+      fg.vx += (GULLET.x - fg.x) * 0.0016 + (Math.random() - 0.5) * 0.5;
+      fg.vy += (GULLET.y - fg.y) * 0.0016 + (Math.random() - 0.5) * 0.5;
+      fg.vx *= 0.965; fg.vy *= 0.965;
+      fg.x += fg.vx; fg.y += fg.vy; fg.rot += fg.vr;
+    }
+    if (s2.pending && now - s2.chewT0 > 900) applyResolve(now);
+  } else if (s2.phase === "form") {
+    for (const fg of s2.frags) {
+      if (fg.fall) { fg.y += 2.4; fg.rot += fg.vr; continue; }
+      fg.x = lerp(fg.x, fg.tx, 0.09);
+      fg.y = lerp(fg.y, fg.ty, 0.09);
+      fg.rot *= 0.9;
+    }
+    if (now - s2.formT0 > 1000) {
+      s2.phase = "hold";
+      s2.holdT0 = now;
+      // 한국어를 읽을 시간 — 12CPS(넷플릭스 한국어 기준)보다 빠르되 글자 수에 비례
+      s2.holdUntil = now + Math.min(9000, 2600 + s2.korean.glyphs.length * 55);
+      s2.frags = [];
+    }
+  } else if (s2.phase === "hold") {
+    if (now > s2.holdUntil) { s2.phase = "settle"; s2.settleT0 = now; }
+  } else if (s2.phase === "settle") {
+    if (now - s2.settleT0 > 900) stage = null;
+  }
+}
+
+// 실제 토큰 도착의 맥박 — 각 틱은 모델이 방금 뱉은 진짜 토큰이다
+function drawTokenPulse(now, gx, gy, ox, oy) {
+  ctx.fillStyle = "rgba(107,97,86,0.4)";
+  ctx.fillRect(gx - 130 + ox, gy + oy, 260, 1);
+  for (let i = pulses.length - 1; i >= 0; i--) {
+    const age = now - pulses[i];
+    if (age > 2600) break;
+    const x = gx + 130 - age * 0.1;
+    if (x < gx - 130) continue;
+    const h = 6 + (i % 5) * 2.4;
+    ctx.fillStyle = `rgba(237,228,211,${(0.75 * (1 - age / 2600)).toFixed(2)})`;
+    ctx.fillRect(x + ox, gy - h + oy, 1.6, h);
+  }
+  ctx.fillStyle = "rgba(107,97,86,0.5)";
+  ctx.font = "10px ui-monospace, Menlo, monospace";
+  ctx.textAlign = "center";
+  ctx.fillText("tokens", gx + ox, gy + 14 + oy);
+  ctx.textAlign = "left";
+}
+const lerp = (a, b, k) => a + (b - a) * k;
+
+function draw(now) {
+  const f = state.fatigue / 10;
+  ctx.fillStyle = "#0A0705";
+  ctx.fillRect(0, 0, W, H);
+
+  // 경련 — 그리고 억누른 분노의 미세한 떨림
+  const rage = Math.min(1, (state.toxin ?? 0) / 7);
+  let ox = 0, oy = 0;
+  if (now < shake.until) {
+    const k = shake.mag * ((shake.until - now) / 800);
+    ox = (Math.random() - 0.5) * 2 * k;
+    oy = (Math.random() - 0.5) * 2 * k;
+  }
+  if (rage > 0.55 && !purge) {
+    ox += (Math.random() - 0.5) * 1.5;
+    oy += (Math.random() - 0.5) * 1.1;
+  }
+  // 구역질: 위로 들썩였다 가라앉는다
+  if (now < gag.until) {
+    const p = 1 - (gag.until - now) / 700;
+    oy -= 16 * Math.sin(Math.PI * p);
+  }
+  // 게움: 세 번의 헛구역질 → 백색 섬광 → 분출. 몸 전체가 들썩인다.
+  let purgeT = -1;
+  let flashK = 0;
+  if (purge) {
+    purgeT = now - purge.start;
+    if (purgeT < 800) {
+      const h = Math.floor(purgeT / 270);
+      const p = (purgeT % 270) / 270;
+      const jerk = (9 + h * 12) * Math.sin(Math.PI * p);
+      oy -= jerk * 0.5;
+      cv.style.transform = `translateY(${(-jerk).toFixed(1)}px)`;
+    } else {
+      cv.style.transform = "";
+    }
+    if (purgeT > 850 && purgeT < 950) flashK = 1 - (purgeT - 850) / 100;
+    if (purgeT > 930 && purgeT < 1110 && blackout.until < now) blackout = { until: now + 190 };
+    if (purgeT > 850 && purgeT < 1300 && frameImg) {
+      for (let i = 0; i < 2; i++) spawnJet();
+      while (jet.length > 70) jet.shift();
+    }
+    if (purgeT > 1500 && !purge.drained) {
+      purge.drained = true;
+      poison.target = 0.12;
+      scars.push(Math.min(1, (state.tokens || 0) / (state.ctxLimit || CTX_MAX)) * W);
+      // 게움의 의례 — 시의 한 행이 돌아온다
+      thought = { text: "그러니 게운다.", born: performance.now() + 1200, poem: true };
+    }
+    if (purgeT > 2700) {
+      purge = null;
+      cv.style.transform = "";
+    }
+  } else if (cv.style.transform) cv.style.transform = "";
+
+  // 호흡
+  // 호흡: 안정 시 사람의 숨(주기 ~4.3초), 병들수록 얕고 빨라진다
+  // 침묵의 악장에서는 호흡이 눈에 보인다 — 숨 쉬는 검은 비석
+  const breathAmp = movement === "침묵" ? 0.006 : 0.0018;
+  let breath = 1 + breathAmp * Math.sin((now / (4300 - f * 1900)) * Math.PI * 2);
+  if (f > 0.7) breath += 0.0011 * Math.sin(now / 210);
+  const bw = W * breath, bh = H * breath;
+  const bx = -(bw - W) / 2 + ox, by = -(bh - H) / 2 + oy;
+
+  // ── 1. 시선: 페이지 풀블리드 ──
+  const sick = `saturate(${(1 - f * 0.5).toFixed(2)}) brightness(${(1 - f * 0.18).toFixed(2)}) sepia(${(f * 0.2).toFixed(2)})`;
+  if (frameImg) {
+    ctx.filter = sick;
+    ctx.drawImage(frameImg, bx, by, bw, bh);
+    ctx.globalAlpha = 0.06 + f * 0.45;
+    ctx.drawImage(ghost, bx, by, bw, bh);
+    ctx.globalAlpha = 1;
+    ctx.filter = "none";
+  }
+
+  // 게움의 찢김
+  if (purge && purgeT > 850 && purgeT < 1350 && frameImg) {
+    const k = 1 - (purgeT - 850) / 500;
+    const strips = 14, sh = 720 / strips;
+    ctx.filter = sick;
+    for (let i = 0; i < strips; i++) {
+      const off = -k * (12 + i * 3 + Math.random() * 22);
+      ctx.drawImage(frameImg, 0, i * sh, 1280, sh,
+        bx + (Math.random() - 0.5) * 7 * k, by + i * sh * SCALE * breath + off, bw, sh * SCALE * breath);
+    }
+    ctx.filter = "none";
+  }
+
+  // ── 2. 베일: 먹을 때는 눈을 감는다. 악장이 밝기를 정한다 ──
+  const veil = stage
+    ? 0.84 + f * 0.06
+    : movement === "침묵"
+      ? 0.58 + f * 0.1
+      : movement === "폭식"
+        ? 0.38 + f * 0.08
+        : 0.16 + f * 0.1;
+  ctx.fillStyle = `rgba(8,6,5,${veil.toFixed(2)})`;
+  ctx.fillRect(0, 0, W, H);
+  if (stage && stage.phase === "ingest") {
+    const r = stage.srcRect;
+    const pulse = 0.5 + 0.3 * ((Math.sin(now / 380) + 1) / 2);
+    ctx.strokeStyle = `rgba(237,228,211,${pulse})`;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(r.x - 12 + ox, r.y - 8 + oy, r.w + 24, r.h + 16);
+  }
+
+  // 역한 것을 먹은 자리가 탄다
+  if (burn && now < burn.until) {
+    const k = (burn.until - now) / 1600;
+    const r = burn.rect;
+    ctx.fillStyle = `rgba(210,37,26,${(0.15 * k).toFixed(2)})`;
+    ctx.fillRect(r.x - 10 + ox, r.y - 8 + oy, r.w + 20, r.h + 16);
+    ctx.strokeStyle = `rgba(210,37,26,${(0.8 * k).toFixed(2)})`;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(r.x - 10 + ox, r.y - 8 + oy, r.w + 20, r.h + 16);
+  }
+
+  // 분노의 색온도 — 독이 찰수록 세상 전체가 붉어진다
+  if (rage > 0.05) {
+    ctx.fillStyle = `rgba(210,37,26,${(rage * 0.10).toFixed(3)})`;
+    ctx.fillRect(0, 40, W, H - 40 - BAR_H);
+  }
+
+  // ── 3. 시선의 궤적 — 배회할 때만 보인다 ──
+  const ck = 0.16;
+  cursor.x = lerp(cursor.x, cursor.tx, ck);
+  cursor.y = lerp(cursor.y, cursor.ty, ck);
+  if (!trail.length || Math.hypot(cursor.x - trail[trail.length - 1].x, cursor.y - trail[trail.length - 1].y) > 7) {
+    trail.push({ x: cursor.x, y: cursor.y, t: now });
+    if (trail.length > 90) trail.shift();
+  }
+  if (!stage) {
+    for (let i = 1; i < trail.length; i++) {
+      const age = (now - trail[i].t) / 4200;
+      if (age > 1) continue;
+      ctx.strokeStyle = `rgba(107,97,86,${(0.34 * (1 - age)).toFixed(2)})`;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([1, 6]);
+      ctx.beginPath();
+      ctx.moveTo(trail[i - 1].x + ox, trail[i - 1].y + oy);
+      ctx.lineTo(trail[i].x + ox, trail[i].y + oy);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+
+  // ── 4. 커서 — 먹는 동안엔 희미해진다 ──
+  ctx.globalAlpha = stage ? 0.3 : 1;
+  ctx.beginPath();
+  ctx.arc(cursor.x + ox, cursor.y + oy, 12, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(250,245,239,0.95)";
+  ctx.fill();
+  ctx.strokeStyle = "#0a0a0a";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cursor.x + ox, cursor.y + oy, 19, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(250,245,239,0.35)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // ── 4.5 내면 패널: 로그인 창을 덮은 어둠 ──
+  ctx.fillStyle = "#100B08";
+  ctx.fillRect(0, 40, PANEL_W, H - 40 - BAR_H);
+  ctx.fillStyle = "rgba(107,97,86,0.3)";
+  ctx.fillRect(PANEL_W - 1, 40, 1, H - 40 - BAR_H);
+  // 지나온 곳 — 배회의 흔적
+  ctx.fillStyle = "#6B6156";
+  ctx.font = "10px ui-monospace, Menlo, monospace";
+  ctx.fillText("trail", 26, 66);
+  let sy = 86;
+  const jShow = journey.slice(-8);
+  for (let i = 0; i < jShow.length; i++) {
+    const isLast = i === jShow.length - 1;
+    const alpha = 0.3 + (i / Math.max(1, jShow.length - 1)) * 0.7;
+    ctx.globalAlpha = alpha;
+    ctx.font = "13px ui-monospace, Menlo, monospace";
+    ctx.fillStyle = isLast ? "#EDE4D3" : "#6B6156";
+    ctx.fillText((isLast ? "● " : "  ") + jShow[i].slice(0, 34), 26, sy);
+    sy += 21;
+  }
+  ctx.globalAlpha = 1;
+  sy = Math.max(sy, 108);
+  ctx.fillStyle = "rgba(107,97,86,0.25)";
+  ctx.fillRect(26, sy - 4, PANEL_W - 52, 1);
+
+  // 날것의 사고 — reasoning tokens, 아래로 흐른다 (패널의 나머지 전부)
+  const THINK_TOP = sy + 22;
+  const THINK_H = H - BAR_H - THINK_TOP - 34;
+  ctx.fillStyle = "#6B6156";
+  ctx.font = `10px ${F_MONO}`;
+  ctx.fillText("reasoning", 26, THINK_TOP - 4);
+  if (think) {
+    ctx.font = `13px ${F_MONO}`;
+    const tw = PANEL_W - 52;
+    const words = think.split(/(\s+)/);
+    const tlines = [];
+    let tl = "";
+    for (const w of words) {
+      if (ctx.measureText(tl + w).width > tw) {
+        tlines.push(tl); tl = w.trimStart();
+      } else tl += w;
+    }
+    tlines.push(tl);
+    const maxLines = Math.floor((THINK_H - 14) / 17);
+    const showLines = tlines.slice(-maxLines);
+    for (let i = 0; i < showLines.length; i++) {
+      const isLast = i === showLines.length - 1;
+      ctx.fillStyle = isLast ? "#BFB5A4" : "#6B6156";
+      ctx.globalAlpha = 0.45 + (i / showLines.length) * 0.55;
+      ctx.fillText(showLines[i], 26, THINK_TOP + 16 + i * 17);
+    }
+    ctx.globalAlpha = 1;
+    if (stage && (stage.phase === "chew" || stage.phase === "read")) {
+      const cur2 = ctx.measureText(showLines[showLines.length - 1] ?? "").width;
+      ctx.fillStyle = "#a4886e";
+      ctx.fillRect(26 + cur2 + 3, THINK_TOP + 6 + (showLines.length - 1) * 17, 6, 12);
+    }
+  }
+
+  // 토큰의 맥박 — 패널 바닥으로: 사고 스트림의 심전도
+  drawTokenPulse(now, PANEL_W / 2, H - BAR_H - 18, 0, 0);
+
+  // 핏방울: 역한 말이 몸으로 떨어진다
+  const surfY = H - BAR_H;
+  for (let i = drops.length - 1; i >= 0; i--) {
+    const d = drops[i];
+    if (now < d.delay) continue;
+    d.y += d.vy;
+    d.vy += 0.12;
+    if (d.y >= surfY - 2) { drops.splice(i, 1); continue; }
+    ctx.fillStyle = "rgba(210,37,26,0.85)";
+    ctx.beginPath();
+    ctx.ellipse(d.x + ox, d.y + oy, d.r * 0.7, d.r * 1.25, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // ── 5. 독: 오른쪽 가장자리의 혈주(血柱) — 평평하고 단단하게 차오른다 ──
+  poison.cur = lerp(poison.cur, poison.target, 0.015);
+  if (poison.cur > 0.01) {
+    const colH = poison.cur * (H - 40 - BAR_H);
+    const colTop = H - BAR_H - colH;
+    ctx.fillStyle = "#D2251A";
+    ctx.fillRect(W - 22, colTop, 22, colH);
+    // 헛구역질 때 기둥이 함께 꿀렁인다 — 형태는 유지한 채 높이만
+    if (purge && purgeT < 800) {
+      const p = (purgeT % 270) / 270;
+      const j2 = Math.sin(Math.PI * p) * 18;
+      ctx.fillRect(W - 22, colTop - j2, 22, j2);
+    }
+  }
+
+  // ── 6. 소화의 극장 ──
+  if (stage) {
+    stepStage(now);
+  }
+  if (stage) {
+    const s2 = stage;
+    if (s2.phase === "ingest") {
+      // 제자리에서 떠오른다 — 단어들이 서로를 가로지르지 않게
+      const k = Math.min(1, (now - s2.t0) / 700);
+      const e = k * k * (3 - 2 * k);
+      ctx.font = s2.font;
+      ctx.fillStyle = s2.memory ? "#8A8174" : "#EDE4D3";
+      ctx.globalAlpha = e * 0.9;
+      for (const w2 of s2.words) {
+        ctx.fillText(w2.str, w2.x + ox, w2.y + 26 * (1 - e) + oy);
+      }
+      ctx.globalAlpha = 1;
+    } else if (s2.phase === "read") {
+      // 왼쪽의 뼈 기둥 — 브루탈리스트의 수직 바
+      if (s2.words.length) {
+        const yTop = s2.words[0].y, yBot = s2.words[s2.words.length - 1].y;
+        ctx.fillStyle = s2.memory ? "rgba(237,228,211,0.35)" : "#EDE4D3";
+        ctx.fillRect(STAGE_X - 54, yTop - 32, 14, yBot - yTop + 50);
+      }
+      ctx.font = s2.font;
+      for (let i = 0; i < s2.words.length; i++) {
+        const w2 = s2.words[i];
+        ctx.fillStyle = s2.memory
+          ? (i < s2.sweepI ? "#8A8174" : i === s2.sweepI ? "#CFC5B2" : "#3C362E")
+          : (i < s2.sweepI ? "#B9B0A0" : i === s2.sweepI ? "#EDE4D3" : "#4A443C");
+        ctx.fillText(w2.str, w2.x + ox, w2.y + oy);
+        if (i === s2.sweepI) {
+          ctx.fillStyle = "rgba(237,228,211,0.85)";
+          ctx.fillRect(w2.x + ox, w2.y + 9 + oy, Math.max(10, w2.w - 10), 2);
+        }
+      }
+    } else if (s2.phase === "chew") {
+      for (let fi = 0; fi < s2.frags.length; fi++) {
+        const fg = s2.frags[fi];
+        ctx.save();
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = "#D9D0BF";
+        ctx.translate(fg.x + ox, fg.y + oy);
+        ctx.rotate(fg.rot);
+        ctx.font = `700 28px ${F_GROT}`;
+        ctx.fillText(fg.ch, 0, 0);
+        // 토큰 ID — 조각마다 붙은 기계의 이름표
+        if (fg.id != null && fi % 3 === 0) {
+          ctx.globalAlpha = 0.5;
+          ctx.fillStyle = "#6B6156";
+          ctx.font = `9px ${F_MONO}`;
+          ctx.fillText(String(fg.id), 2, 14);
+        }
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+    } else if (s2.phase === "form") {
+      const k = Math.min(1, (now - s2.formT0) / 1000);
+      ctx.font = `700 28px ${F_GROT}`;
+      for (const fg of s2.frags) {
+        ctx.save();
+        ctx.globalAlpha = fg.fall ? 0.7 : 0.85 * (1 - k * 0.75);
+        ctx.fillStyle = fg.fall ? "#9a5a40" : "#D9D0BF";
+        ctx.translate(fg.x + ox, fg.y + oy);
+        ctx.rotate(fg.rot);
+        ctx.fillText(fg.ch, 0, 0);
+        ctx.restore();
+      }
+      ctx.font = s2.korean.font;
+      ctx.fillStyle = s2.verdict === "GAG" ? "#EDE4D3" : "#EDE4D3";
+      ctx.globalAlpha = k;
+      for (const g of s2.korean.glyphs) ctx.fillText(g.ch, g.x + ox, g.y + oy);
+      ctx.globalAlpha = 1;
+    } else if (s2.phase === "hold" || s2.phase === "settle") {
+      const k2 = s2.phase === "settle" ? Math.max(0, 1 - (now - s2.settleT0) / 900) : 1;
+      const sink = s2.phase === "settle" ? (now - s2.settleT0) * 0.06 : 0;
+      ctx.globalAlpha = k2;
+      // 기념비를 위아래로 무는 뼈 슬래브
+      const gl = s2.korean.glyphs;
+      let slabBottom = 0;
+      if (gl.length) {
+        const minY = gl[0].y, maxY = gl[gl.length - 1].y;
+        ctx.fillStyle = "#EDE4D3";
+        ctx.fillRect(STAGE_X + 20, minY - 90 + sink + oy, STAGE_W - 40, 14);
+        ctx.fillRect(STAGE_X + 20, maxY + 34 + sink + oy, STAGE_W - 40, 14);
+        slabBottom = maxY + 34 + sink;
+      }
+      ctx.font = s2.korean.font;
+      ctx.fillStyle = "#EDE4D3";
+      for (const g of s2.korean.glyphs) ctx.fillText(g.ch, g.x + ox, g.y + sink + oy);
+      // 망설임 — 기계가 버린 대안들 (실제 logprobs)
+      if (s2.hesitations?.length && slabBottom) {
+        ctx.font = `12px ${F_MONO}`;
+        ctx.fillStyle = "#6B6156";
+        const hs = s2.hesitations
+          .map((h) => `${h.alt} ${Math.round(h.p * 100)}%`)
+          .join("   ");
+        ctx.fillText(`버린 말 — ${hs}`, STAGE_X + 20, slabBottom + 38 + oy);
+      }
+      // 진위 — 다 삼키고 나서야 도장이 찍힌다: 겪은 말인가, 지어낸 말인가
+      if (typeof s2.fake === "boolean" && slabBottom && s2.holdT0 && now - s2.holdT0 > 750) {
+        const pop = Math.min(1, (now - s2.holdT0 - 750) / 160);
+        const txt = (s2.fake ? "가짜" : "진짜") + (s2.fakeP ? ` ${Math.round(s2.fakeP * 100)}%` : "");
+        ctx.font = `700 15px ${F_GROT}`;
+        const tw2 = ctx.measureText(txt).width;
+        const bw = tw2 + 20, bh = 24;
+        const cx2 = STAGE_X + STAGE_W - 20 - bw / 2, cy2 = slabBottom + 36 + oy;
+        ctx.save();
+        ctx.translate(cx2, cy2);
+        const sc = 1.35 - 0.35 * pop; // 도장이 내려찍히듯
+        ctx.scale(sc, sc);
+        ctx.globalAlpha = k2 * pop;
+        ctx.textAlign = "center";
+        if (s2.fake) {
+          ctx.fillStyle = "#D2251A";
+          ctx.fillRect(-bw / 2, -bh / 2, bw, bh);
+          ctx.fillStyle = "#0A0705";
+        } else {
+          ctx.strokeStyle = "rgba(107,97,86,0.9)";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(-bw / 2, -bh / 2, bw, bh);
+          ctx.fillStyle = "#6B6156";
+        }
+        ctx.fillText(txt, 0, 5);
+        ctx.textAlign = "left";
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // ── 6.5 폭식의 꿀꺽 — 씹지 않고 목구멍으로 사라진다 ──
+  for (let i = gulps.length - 1; i >= 0; i--) {
+    const g3 = gulps[i];
+    const p = (now - g3.t0) / 750;
+    if (p < 0) continue;
+    if (p > 1) { gulps.splice(i, 1); continue; }
+    const e = p * p;
+    const x = lerp(g3.sx, GULLET.x + (Math.random() - 0.5) * 8, e);
+    const y = lerp(g3.sy, GULLET.y + 90, e);
+    ctx.globalAlpha = 0.85 * (1 - e * 0.7);
+    ctx.fillStyle = "#CFC5B2";
+    ctx.font = `700 ${Math.round(26 - e * 12)}px ${F_GROT}`;
+    ctx.fillText(g3.str, x + ox, y + oy);
+  }
+  ctx.globalAlpha = 1;
+
+  // ── 7. 구역질: 올라오다 다시 삼켜지는 글자들 ──
+  for (let i = gagChars.length - 1; i >= 0; i--) {
+    const g2 = gagChars[i];
+    const p = (now - g2.t0) / 900;
+    if (p < 0) continue;
+    if (p > 1) { gagChars.splice(i, 1); continue; }
+    const y = g2.y0 - Math.sin(Math.PI * p) * g2.rise;
+    ctx.globalAlpha = 0.7 * Math.sin(Math.PI * p);
+    ctx.fillStyle = "#D2251A";
+    ctx.font = `700 15px ${F_GROT}`;
+    ctx.fillText(g2.ch, g2.x + ox, y + oy);
+  }
+  ctx.globalAlpha = 1;
+
+  // ── 8. 분출과 잔류 ──
+  for (let i = jet.length - 1; i >= 0; i--) {
+    const p = jet[i];
+    p.x += p.vx; p.y += p.vy; p.vy += 0.34;
+    if (p.vy > 0 && p.y < H * 0.62 && !p.stuck) {
+      p.stuck = true; p.vx = 0; p.vy = 0.05 + Math.random() * 0.2;
+      debris.push(p);
+      jet.splice(i, 1);
+      continue;
+    }
+    if (p.y > H - BAR_H) { jet.splice(i, 1); continue; }
+    drawVomitChar(p);
+  }
+  for (let i = debris.length - 1; i >= 0; i--) {
+    const p = debris[i];
+    p.y += p.vy;
+    p.alpha -= 0.0004;
+    if (p.alpha <= 0.04 || p.y > H - BAR_H - 4) { debris.splice(i, 1); continue; }
+    drawVomitChar(p);
+  }
+  ctx.globalAlpha = 1;
+  while (debris.length > 90) debris.shift();
+
+  // ── 9. 위장: 100만 토큰의 지평선 ──
+  ctx.fillStyle = "#120C08";
+  ctx.fillRect(0, H - BAR_H, W, BAR_H);
+  ctx.fillStyle = "rgba(107,97,86,0.3)";
+  ctx.fillRect(0, H - BAR_H, W, 1);
+  for (let i = 1; i < 10; i++) {
+    ctx.fillStyle = "rgba(107,97,86,0.25)";
+    ctx.fillRect((W / 10) * i, H - BAR_H + 6, 1, BAR_H - 12);
+  }
+  // 바 = 지금 속에 든 것. 읽으면 차고, 게우면 빠진다. 흉터만 오른쪽으로 쌓여 남는다.
+  barFill = lerp(barFill, Math.min(1, state.fill || 0), 0.09);
+  const fillW = Math.max(3, barFill * W);
+  ctx.fillStyle = "#1D130B";
+  ctx.fillRect(0, H - BAR_H + 3, fillW, BAR_H - 6);
+  for (let y = H - BAR_H + 5; y < H - 4; y += 3) {
+    ctx.fillStyle = "rgba(107,97,86,0.22)";
+    ctx.fillRect(0, y, fillW, 1);
+  }
+  ctx.fillStyle = "#EDE4D3";
+  ctx.fillRect(fillW, H - BAR_H + 2, 2, BAR_H - 4);
+  for (const sx of scars) {
+    ctx.fillStyle = "rgba(210,37,26,0.95)";
+    ctx.fillRect(sx, H - BAR_H + 2, 2.5, BAR_H - 4);
+  }
+  ctx.fillStyle = "#6B6156";
+  ctx.font = "11px ui-monospace, Menlo, monospace";
+  ctx.textAlign = "right";
+  ctx.fillText(`오늘 통과 ${(state.tokens || 0).toLocaleString()} tok`, W - 14, H - BAR_H / 2 + 4);
+  ctx.textAlign = "left";
+
+  // ── 10. 생각: 자막처럼 ──
+  drawThought(thought, now);
+
+  // ── 11. 헤더: 증거 ──
+  ctx.fillStyle = "rgba(10,8,7,0.78)";
+  ctx.fillRect(0, 0, W, 40);
+  // 방송의 붉은 점은 깜빡이지 않는다 — 호흡만 한다
+  const liveBreath = (Math.sin((now / 4300) * Math.PI * 2) + 1) / 2;
+  ctx.fillStyle = `rgba(210,37,26,${0.72 + liveBreath * 0.18})`;
+  ctx.beginPath(); ctx.arc(30, 20, 4.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#D9D0C0";
+  ctx.font = "600 13px ui-monospace, Menlo, monospace";
+  ctx.fillText("LIVE", 42, 24);
+  ctx.fillStyle = "#8A8174";
+  ctx.font = "13px ui-monospace, Menlo, monospace";
+  ctx.fillText(new Date(Date.now() + 9 * 3600e3).toISOString().slice(11, 19), 94, 24);
+  // 악장 — 녹아웃 박스 (뼈 위의 검정)
+  const mvLabel = `${ROMAN[movement] || ""} ${movement}`;
+  ctx.font = "700 12px " + F_MONO;
+  const mvW = ctx.measureText(mvLabel).width;
+  ctx.fillStyle = "#EDE4D3";
+  ctx.fillRect(164, 9, mvW + 18, 22);
+  ctx.fillStyle = "#0A0705";
+  ctx.fillText(mvLabel, 173, 24);
+  ctx.fillStyle = "#6B6156";
+  ctx.fillText((nav.url || "").replace("https://", "").slice(0, 62), 268, 24);
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#6B6156";
+  ctx.fillText(`${MODEL_ID} · MoE · 1M ctx · reasoning`, W - 22, 24);
+  ctx.textAlign = "left";
+
+  // ── 11.4 독한 단어의 섬광 — 망막에 꽂히고 사라진다 ──
+  if (subliminal && now < subliminal.until) {
+    ctx.fillStyle = "#060404";
+    ctx.fillRect(0, 0, W, H);
+    ctx.font = `700 200px ${F_GROT}`;
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#D2251A";
+    ctx.fillText(subliminal.word, W / 2, H / 2 + 50);
+    ctx.textAlign = "left";
+  }
+
+  // ── 11.5 백색 섬광 — 구역의 순간, 몸이 뒤집힌다 ──
+  if (flashK > 0) {
+    ctx.fillStyle = `rgba(242,233,220,${(flashK * 0.88).toFixed(2)})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // ── 12. 암전 ──
+  if (now < blackout.until) {
+    const k = (blackout.until - now) / 190;
+    ctx.fillStyle = `rgba(4,3,2,${(0.92 * k).toFixed(2)})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  requestAnimationFrame(draw);
+}
+
+function spawnJet() {
+  const words = purge.matter.split(/\s+/).filter((w) => w.length > 1);
+  jet.push({
+    ch: (words.length ? words[Math.floor(Math.random() * words.length)] : "쓴물").toUpperCase(),
+    x: W / 2 + (Math.random() - 0.5) * 180,
+    y: H - BAR_H - poison.cur * H * 0.3,
+    vx: (Math.random() - 0.5) * 9,
+    vy: -(13 + Math.random() * 14),
+    size: 36 + Math.random() * 40,
+    rot: (Math.random() - 0.5) * 0.9,
+    alpha: 0.94,
+    stuck: false,
+  });
+}
+
+function drawVomitChar(p) {
+  ctx.save();
+  ctx.globalAlpha = p.alpha;
+  // 긁힌 필름의 떨림 — 박힌 말은 가만히 있지 못한다
+  const jx = p.stuck === false ? 0 : (Math.random() - 0.5) * 1.3;
+  ctx.translate(p.x + jx, p.y + jx * 0.6);
+  ctx.rotate(p.rot);
+  ctx.font = `700 ${p.size}px ${F_GROT}`;
+  ctx.strokeStyle = "rgba(20,10,6,0.8)";
+  ctx.lineWidth = Math.max(2, p.size * 0.1);
+  ctx.lineJoin = "round";
+  ctx.strokeText(p.ch, 0, 0);
+  ctx.fillStyle = "#D2251A";
+  ctx.fillText(p.ch, 0, 0);
+  ctx.restore();
+}
+
+function drawThought(t, now) {
+  if (!t) return;
+  const age = now - t.born;
+  if (age < 0) return;
+  const a = Math.min(1, age / 500);
+  if (a <= 0.02) return;
+  ctx.save();
+  if (t.poem) {
+    ctx.globalAlpha = a * Math.max(0, Math.min(1, (5200 - age) / 800));
+    ctx.font = `30px ${F_KO}`;
+    ctx.textAlign = "center";
+    ctx.strokeStyle = "rgba(8,6,4,0.9)";
+    ctx.lineWidth = 5;
+    ctx.lineJoin = "round";
+    ctx.fillStyle = "#EDE4D3";
+    try { ctx.letterSpacing = "8px"; } catch {}
+    ctx.strokeText(t.text, W / 2, H - BAR_H - 74);
+    ctx.fillText(t.text, W / 2, H - BAR_H - 74);
+    try { ctx.letterSpacing = "0px"; } catch {}
+    ctx.textAlign = "left";
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    return;
+  }
+  ctx.font = `600 38px ${F_KO}`;
+  const rageT = Math.min(1, (state.toxin ?? 0) / 7);
+  const maxW = 980;
+  const lines = [];
+  let line = "";
+  for (const ch of t.text) {
+    if (ctx.measureText(line + ch).width > maxW) {
+      lines.push(line); line = ch;
+    } else line += ch;
+  }
+  lines.push(line);
+  const lh = 54;
+  const baseY = H - BAR_H - 44 - (lines.length - 1) * lh;
+  ctx.globalAlpha = a;
+  ctx.textAlign = "center";
+  ctx.strokeStyle = "rgba(8,6,4,0.9)";
+  ctx.lineWidth = 5;
+  ctx.lineJoin = "round";
+  ctx.fillStyle = "#EDE4D3";
+  for (let i = 0; i < lines.length; i++) {
+    const tw = rageT > 0.6 ? (Math.random() - 0.5) * 1.8 : 0;
+    ctx.strokeText(lines[i], W / 2 + tw, baseY + i * lh + tw * 0.5);
+    ctx.fillText(lines[i], W / 2 + tw, baseY + i * lh + tw * 0.5);
+  }
+  ctx.textAlign = "left";
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

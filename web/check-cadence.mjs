@@ -1,0 +1,25 @@
+import http from "node:http"; import { readFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url"; import { chromium } from "playwright";
+const root=fileURLToPath(new URL("../dist-web/",import.meta.url));
+const mime={".html":"text/html;charset=utf-8",".jsonl":"text/plain;charset=utf-8",".woff2":"font/woff2",".png":"image/png"};
+const srv=http.createServer((q,r)=>{let p=(q.url||"/").split("?")[0]; if(p==="/")p="/index.html";
+  const fp=root+p.slice(1); if(!existsSync(fp)){r.writeHead(404);r.end();return;}
+  const ext=p.slice(p.lastIndexOf(".")); r.writeHead(200,{"content-type":mime[ext]||"application/octet-stream"});
+  r.end(readFileSync(fp));});
+await new Promise(r=>srv.listen(4780,r));
+const b=await chromium.launch({channel:'chrome',headless:false});
+const pg=await b.newPage({viewport:{width:1600,height:900}});
+await pg.goto("http://localhost:4780/");
+await pg.evaluate(()=>{window.__arr=[]; const o=window.swallowText;
+  window.swallowText=(t,m)=>{window.__arr.push({at:performance.now(),t:String(t).slice(0,42)}); return o(t,m);};});
+await pg.evaluate(()=>{window.__pop=[];setInterval(()=>window.__pop.push(letters.length),1000);});
+await pg.waitForTimeout(60000);
+const r=await pg.evaluate(()=>({arr:window.__arr,n:letters.length,pop:window.__pop}));
+const g=[]; for(let i=1;i<r.arr.length;i++) g.push(Math.round(r.arr[i].at-r.arr[i-1].at));
+console.log(`45초 동안 삼킨 문장 ${r.arr.length}개 · 현재 글자 ${r.n}개`);
+console.log("간격(ms):", g.join(" "));
+const p=r.pop; const empty=p.filter(x=>x===0).length;
+console.log(`위장 글자수: 평균 ${Math.round(p.reduce((a,b)=>a+b,0)/p.length)} · 최대 ${Math.max(...p)} · 빈 화면 ${empty}/${p.length}초`);
+r.arr.slice(0,6).forEach(x=>console.log("  ·",x.t));
+await pg.screenshot({path:"out/cadence.png"});
+await b.close(); await new Promise(r2=>srv.close(r2)); process.exit(0);

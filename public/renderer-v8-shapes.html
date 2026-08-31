@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>구토</title>
+<!-- 오프라인 번들 — 전시장 네트워크가 죽어도 서체는 로컬에 있다 -->
+<link href="/vendor/noto-serif-kr.css" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;background:#0A0705;height:100%;overflow:hidden;cursor:none}
+  canvas{display:block;position:fixed;inset:0;width:100vw;height:100vh}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<script>
+// ── 소화불량 v8 렌더러: 납작한 SF 근본도형 + 리퀴드글래스, 진짜 엔진 구동 ──
+const INK='#0A0705', BONE='#EDE4D3', RED='#D2251A', ASH='#6B6156';
+const F_G=`900 %px "Helvetica Neue",Arial,sans-serif`;
+const F_K=`900 %px "Noto Serif KR",serif`;
+const BEAT=560;
+
+const glc=document.getElementById('gl');
+const oc=document.createElement('canvas'), S=oc.getContext('2d');
+let DPR;
+function resize(){
+  // 5K 업로드 비용 억제: 구성 캔버스 폭을 2000px 근처로 캡
+  const cap=2000, w=innerWidth, h=innerHeight;
+  const scale=Math.min(1.6, devicePixelRatio||1, cap/w);
+  DPR=scale;
+  oc.width=glc.width=Math.round(w*scale);
+  oc.height=glc.height=Math.round(h*scale);
+  glc.style.width=w+'px'; glc.style.height=h+'px';
+}
+resize();
+const W=()=>oc.width, H=()=>oc.height;
+
+// ── 배경 substrate: 날것의 사고 스트림 (reasoning tokens) ──
+let think='', nausea=0, pTarget=0, marg='';
+function drawThink(){
+  if(!think)return;
+  S.save();
+  const fs=Math.round(H()*0.028), lh=fs*1.5, maxW=W()*0.92, x=W()*0.04;
+  S.font=`${fs}px ui-monospace,Menlo,monospace`;
+  S.textAlign='left';S.textBaseline='alphabetic';
+  // 구토감이 오를수록 사고 스트림이 바닥에서 차올라 화면을 꽉 채운다
+  const cover=0.14+nausea*0.86;
+  S.fillStyle=`rgba(190,178,158,${(0.14+nausea*0.32).toFixed(3)})`;
+  const lines=[];let line='';
+  for(const w of think.replace(/\s+/g,' ').split(' ')){
+    if(S.measureText(line+w+' ').width>maxW){lines.push(line);line='';}
+    line+=w+' ';
+  }
+  if(line)lines.push(line);
+  const nShow=Math.max(1,Math.floor(H()*cover/lh));
+  const show=lines.slice(-nShow);
+  let y=H()-H()*0.035-(show.length-1)*lh;
+  for(const l of show){S.fillText(l,x,y);y+=lh;}
+  S.restore();
+}
+// ── 프리미티브 ──
+function bg(){S.fillStyle=INK;S.fillRect(0,0,W(),H());drawThink();}
+function rect(x,y,w,h,c){S.fillStyle=c;S.fillRect(x,y,w,h);}
+function disc(x,y,r,c){S.fillStyle=c;S.beginPath();S.arc(x,y,r,0,7);S.fill();}
+function ring(x,y,r,t,c,a0=0,a1=7){S.strokeStyle=c;S.lineWidth=t;S.beginPath();S.arc(x,y,r,a0,a1);S.stroke();}
+function line(x0,y0,x1,y1,t,c){S.strokeStyle=c;S.lineWidth=t;S.beginPath();S.moveTo(x0,y0);S.lineTo(x1,y1);S.stroke();}
+function tri(x,y,r,c,rot=0){S.save();S.translate(x,y);S.rotate(rot);S.fillStyle=c;S.beginPath();
+  for(let i=0;i<3;i++){const a=-Math.PI/2+i*2.0944;S[i?'lineTo':'moveTo'](Math.cos(a)*r,Math.sin(a)*r);}S.closePath();S.fill();S.restore();}
+function gw(t,x,y,fs,c,al){S.fillStyle=c;S.textAlign=al||'left';S.textBaseline='alphabetic';S.font=F_G.replace('%',fs);S.fillText((t||'').toUpperCase(),x,y);}
+function kw(ls,x,y,fs,c,al){S.fillStyle=c;S.textAlign=al||'left';S.textBaseline='alphabetic';S.font=F_K.replace('%',fs);ls.forEach((l,i)=>S.fillText(l,x,y+i*fs*1.05));}
+function kvert(txt,x,y,fs,c){S.fillStyle=c;S.textAlign='center';S.font=F_K.replace('%',fs);[...(txt||'')].forEach((ch,i)=>S.fillText(ch,x,y+i*fs*1.08));}
+// 그로테스크 자동 축소 (셀 폭에 맞춤)
+function gwFit(t,x,y,maxW,fs,c,al){S.font=F_G.replace('%',fs);let w=S.measureText((t||'').toUpperCase()).width;
+  if(w>maxW)fs=fs*maxW/w; gw(t,x,y,fs,c,al); return fs;}
+
+// ── 텍스트 유틸 ──
+// HTML 엔티티 디코드 (레딧 &gt; &amp; &#39; 등) + 순수 문장부호 토큰 제거
+function dec(s){const t=document.createElement('textarea');t.innerHTML=String(s||'');return t.value;}
+function toks(text){return dec(text).replace(/\s+/g,' ').trim().split(' ').filter(w=>/[A-Za-z0-9가-힣]/.test(w));}
+function chunks(text,n){const ws=toks(text);const out=[];for(let i=0;i<ws.length;i+=n)out.push(ws.slice(i,i+n).join(' '));return out;}
+function kwrap(text,maxCh){const ws=toks(text);const out=[];let cur='';
+  for(const w of ws){if((cur+' '+w).trim().length>maxCh){if(cur)out.push(cur);cur=w;}else cur=(cur+' '+w).trim();}
+  if(cur)out.push(cur);return out.slice(0,4);}
+function words(text,n){return toks(text).slice(0,n);}
+
+// ── SF 도형 카드 (모두 (t)=>void, oc에 그림) ──
+function scMonolith(w){return t=>{bg();
+  ring(W()*0.5,H()*0.5,H()*0.55,2.4*DPR,'rgba(237,228,211,0.32)');
+  const a=t*1.1+2.2; disc(W()*0.5+Math.cos(a)*H()*0.55,H()*0.5+Math.sin(a)*H()*0.55,4*DPR,BONE);
+  rect(W()*0.43,H()*0.12,W()*0.14,H()*0.76,BONE);
+  gwFit(w,W()*0.5,H()*0.965,W()*0.9,H()*0.075,BONE,'center');};}
+function scBisect(w){return ()=>{bg();rect(0,0,W()*0.5,H(),BONE);
+  gwFit(w,W()*0.55,H()*0.56,W()*0.4,H()*0.15,BONE,'left');};}
+function scOrbit(w){return t=>{bg();const x=W()*0.5,y=H()*0.47;
+  disc(x,y,H()*0.16,BONE);
+  ring(x,y,H()*0.26,2.6*DPR,'rgba(237,228,211,0.5)');
+  ring(x,y,H()*0.36,2.6*DPR,'rgba(237,228,211,0.28)');
+  ring(x,y,H()*0.36,6*DPR,BONE,t*2.2,t*2.2+0.9);
+  const a=t*1.5;disc(x+Math.cos(a)*H()*0.26,y+Math.sin(a)*H()*0.26,7*DPR,RED);
+  gwFit(w,x,H()*0.93,W()*0.9,H()*0.08,BONE,'center');};}
+function scWedge(w){return ()=>{bg();
+  S.save();S.translate(W()*0.5,H()*0.44);S.rotate(-0.16);rect(-W()*0.65,-H()*0.065,W()*1.3,H()*0.13,BONE);S.restore();
+  gwFit(w,W()*0.06,H()*0.3,W()*0.88,H()*0.17,BONE);};}
+function scMass(w){return ()=>{bg();gwFit(w,W()*0.045,H()*0.72,W()*1.4,H()*0.5,BONE);};}
+function scTriangle(w){return t=>{bg();tri(W()*0.5,H()*0.44,H()*0.32,BONE,Math.sin(t*0.7)*0.05);
+  gwFit(w,W()*0.5,H()*0.92,W()*0.9,H()*0.09,BONE,'center');};}
+function scHorizon(w){return t=>{bg();const hy=H()*0.6,k=Math.min(1,t*1.2);
+  disc(W()*0.5,hy+H()*0.16-(H()*0.26)*k,H()*0.12,RED);rect(0,hy,W(),H()-hy,INK);line(0,hy,W(),hy,2*DPR,BONE);
+  gwFit(w,W()*0.06,H()*0.2,W()*0.88,H()*0.12,BONE);};}
+function scEclipse(w,warm){return t=>{bg();const R=H()*0.28,x=W()*0.5,y=H()*0.45;const k=Math.min(1,t*1.1);
+  if(k>0.9)ring(x,y,R*1.03,5*DPR,RED);
+  disc(x,y,R,BONE);disc(x+(1-k)*R*2.4,y,R*1.02,INK);
+  gwFit(w,W()*0.5,H()*0.9,W()*0.9,H()*0.09,BONE,'center');};}
+const INTAKE=[scMonolith,scBisect,scOrbit,scWedge,scMass,scTriangle,scHorizon];
+function intakeCard(w,i){return INTAKE[i%INTAKE.length](w);}
+// 되새김(기억, 한국어) 카드
+function scMemory(text){const ls=kwrap(text,14);return t=>{bg();
+  ring(W()*0.5,H()*0.5,H()*0.42,2.2*DPR,'rgba(237,228,211,0.28)');
+  kw(ls,W()*0.5,H()*(0.5-ls.length*0.045),H()*0.075,'rgba(237,228,211,0.75)','center');};}
+
+// ── 삼킴: 세계의 말이 몸의 말(한국어)로 ──
+function swKnock(ko){const ls=kwrap(ko,13);return ()=>{bg();
+  rect(0,H()*0.34,W(),H()*0.66,BONE);
+  kw(ls,W()*0.06,H()*(0.46+(4-ls.length)*0.04),H()*0.135,INK);};}
+function swMono(ko){const txt=(ko||'').replace(/\s/g,'').slice(0,7);return ()=>{bg();
+  rect(W()*0.4,H()*0.08,W()*0.2,H()*0.84,BONE);kvert(txt,W()*0.5,H()*0.22,H()*0.09,INK);};}
+
+// ── 게움 ──
+function pgEclipse(w){return t=>{bg();const R=H()*0.28,x=W()*0.5,y=H()*0.45;const k=Math.min(1,t*1.8);
+  ring(x,y,R*(1.02+0.1*k),5*DPR,RED);disc(x,y,R,BONE);disc(x,y,R*1.02,INK);
+  gwFit(w,x,H()*0.9,W()*0.9,H()*0.09,RED,'center');};}
+function pgDiscBig(w){return t=>{bg();disc(W()*0.5,H()*0.5,H()*(0.3+0.35*Math.min(1,t*1.6)),RED);
+  gwFit(w,W()*0.5,H()*0.58,W()*0.9,H()*0.22,INK,'center');};}
+function pgSlam(w){return ()=>{rect(0,0,W(),H(),RED);gwFit(w,W()*0.5,H()*0.6,W()*0.9,H()*0.32,INK,'center');};}
+function pgVomit(ws){const seed=ws.join('').replace(/[^A-Za-z]/g,'').split('').map(ch=>({ch,dx:(Math.random()*2-1)*0.45,dy:Math.random()*0.55+0.1,r:(Math.random()*2-1)*1.4}));
+  return ()=>{bg();seed.forEach(o=>{S.save();S.translate(W()*0.5+o.dx*W(),H()*0.38+o.dy*H());S.rotate(o.r);
+    S.fillStyle=RED;S.textAlign='center';S.font=F_G.replace('%',H()*0.14);S.fillText(o.ch,0,0);S.restore();});};}
+function pgResidue(ws){return t=>{bg();
+  S.fillStyle=RED;S.beginPath();S.moveTo(0,H());
+  for(let x=0;x<=W();x+=W()/60)S.lineTo(x,H()*0.86+Math.sin(x/W()*9+t*2.0)*H()*0.013);
+  S.lineTo(W(),H());S.closePath();S.fill();
+  tri(W()*0.24,H()*0.79,H()*0.045,RED,0.7);tri(W()*0.66,H()*0.82,H()*0.04,RED,-0.5);
+  ws.slice(0,3).forEach((w,i)=>{S.save();S.translate(W()*(0.12+i*0.28),H()*0.8);S.rotate((i%2?1:-1)*0.1);
+    S.fillStyle=RED;S.font=F_G.replace('%',H()*0.07);S.textAlign='left';S.fillText((w||'').toUpperCase(),0,0);S.restore();});};}
+// 헛구역질: 붉음/잉크가 빠르게 교대로 발작
+function pgConvulse(w){return t=>{const on=Math.floor(t*11)%2===0;S.fillStyle=on?RED:INK;S.fillRect(0,0,W(),H());
+  gwFit(w,W()*0.5,H()*0.61,W()*0.9,H()*0.3,on?INK:RED,'center');};}
+// 범람: 붉은 것이 바닥에서 차올라 화면을 삼킨다
+function pgFlood(ws){return t=>{bg();const k=Math.min(1,t*1.0);rect(0,H()*(1-k),W(),H()*k,RED);
+  ws.slice(0,4).forEach((w,i)=>{const yy=H()*(1-k)+H()*0.11+i*H()*0.11;if(yy<H()*0.96){S.fillStyle=INK;S.font=F_G.replace('%',H()*0.09);S.textAlign='left';S.fillText((w||'').toUpperCase(),W()*0.07,yy);}});};}
+// 쏟아짐: 낱말이 붉게 위에서 아래로 흘러내린다
+function pgPour(ws){const seed=ws.slice(0,9).map((w,i)=>({w,x:0.08+(i%4)*0.23,spd:0.55+Math.random()*0.6,off:Math.random()}));
+  return t=>{bg();seed.forEach(o=>{const y=((t*o.spd+o.off)%1.25)*H()*1.1;S.save();S.translate(W()*o.x,y);
+    S.fillStyle=RED;S.font=F_G.replace('%',H()*0.075);S.textAlign='left';S.fillText((o.w||'').toUpperCase(),0,0);S.restore();});};}
+// AI의 구역 — 붉은 바닥 위, 몸이 밀어내는 한국어 (대사)
+function pgMargin(txt){const ls=kwrap(txt,15);return ()=>{S.fillStyle=RED;S.fillRect(0,0,W(),H());
+  kw(ls,W()*0.06,H()*(0.5-(ls.length-1)*0.07),H()*0.115,INK);};}
+// 게움 안무 — 매번 다르게
+function purgeVariant(m){
+  const ew=((m.matter&&m.matter.length)?m.matter:[m.text]).join(' ');
+  const ews=words(ew,8), trig=words(m.text,3).join(' '), one=words(m.text,1)[0]||'—';
+  const V=[]; const pick=Math.floor(Math.random()*3);
+  if(pick===0){V.push([pgEclipse(trig),1,0.5],[pgDiscBig('YOU'),1,0.8],[pgConvulse(one),1,0.95],[pgVomit(ews),1,1.0]);}
+  else if(pick===1){V.push([pgConvulse(trig),1,0.7],[pgFlood(ews),2,1.0]);}
+  else{V.push([pgEclipse(trig),1,0.5],[pgPour(ews),2,0.9],[pgVomit(ews),1,1.0]);}
+  if(marg)V.push([pgMargin(marg),2,0.35]);   // AI의 구역 대사
+  V.push([pgResidue(ews),3,0.2]);
+  return V;
+}
+
+// ── 정적/휴지 ──
+let movement='정독';
+function idle(t){bg();
+  const cx=W()*0.5, cy=H()*0.5, R=H()*0.33, br=1+0.012*Math.sin(t*0.9); // 숨
+  // 두꺼운 뼈 링 — 몸의 둘레
+  ring(cx,cy,R*br,6*DPR,'rgba(237,228,211,0.34)');
+  // 붉은 호 = 차오르는 구토감. 한 바퀴 다 차면 게운다 (12시부터 시계방향)
+  if(nausea>0.015){
+    S.save();S.strokeStyle=RED;S.lineWidth=9*DPR;S.lineCap='round';
+    S.beginPath();S.arc(cx,cy,R*br,-Math.PI/2,-Math.PI/2+nausea*Math.PI*2);S.stroke();
+    S.restore();
+  }
+  if(movement==='침묵'){ // 게움 직후: 비워진 채 숨만
+    disc(cx,cy,H()*(0.016+0.007*(0.5+0.5*Math.sin(t*1.2))),'rgba(210,37,26,0.6)');
+  }}
+
+// ── 시퀀서 ──
+let queue=[], curFn=idle, curBeats=1, stepStart=0, warp=0, targetWarp=0, sick=0;
+function push(fn,beats,w){queue.push({fn,beats,w:w||0});}
+function clearQ(){queue.length=0;}
+function advance(now){
+  if(queue.length){const s=queue.shift();curFn=s.fn;curBeats=s.beats;stepStart=now;if(s.w)warp=Math.max(warp,s.w);}
+  else{curFn=idle;curBeats=1;stepStart=now;}
+}
+
+// ── 이벤트 → 시퀀스 ──
+function onReading(m){
+  if(m.memory){clearQ();push(scMemory(m.text),3);return;}
+  const cs=chunks(m.text,3).slice(0,7);
+  clearQ();
+  cs.forEach((c,i)=>push(intakeCard(c,i),1));
+  if(cs.length===0)push(intakeCard('…',0),1);
+}
+function onVerdict(m){
+  targetWarp=Math.min(1,(m.toxin||0)/7);
+  if(m.marginalia)marg=m.marginalia;
+  if(m.v==='SWALLOW'){
+    sndSwallow();
+    clearQ();
+    if(m.translation&&m.translation.length<10)push(swMono(m.translation),4,0.15);
+    else push(swKnock(m.translation||m.text),4,0.15);
+  }else if(m.v==='GAG'){
+    sndHeave(false);
+    clearQ();
+    push(pgEclipse(words(m.text,3).join(' ')),1,0.4);
+    push(pgVomit(words(m.text,4)),1,0.6);
+    push(idle,1,0);
+  }else if(m.v==='PURGE'){
+    sndHeave(true);
+    clearQ();
+    think='';   // 게움 = 사고까지 게워낸다 (substrate 비움)
+    purgeVariant(m).forEach(s=>push(s[0],s[1],s[2]));
+  }
+}
+function onGulp(m){const cs=chunks(m.text,4).slice(0,3);
+  cs.forEach((c,i)=>push(scMass(c),1,0.05));}
+
+// ── 사운드: YHCHI 계열 리듬 엔진 (Web Audio, 절차적) ──
+let AC=null, master=null, audioOn=false, restUntil=0, nbeat=0, bi=0, noiseB=null;
+function noiseBuf(){if(noiseB)return noiseB;const n=Math.floor(AC.sampleRate*0.4);noiseB=AC.createBuffer(1,n,AC.sampleRate);
+  const d=noiseB.getChannelData(0);for(let i=0;i<n;i++)d[i]=Math.random()*2-1;return noiseB;}
+function env(g,t0,a,d,pk){g.gain.setValueAtTime(0.0001,t0);g.gain.linearRampToValueAtTime(pk,t0+a);g.gain.exponentialRampToValueAtTime(0.0001,t0+a+d);}
+function kick(t0,v){const o=AC.createOscillator(),g=AC.createGain();o.type='sine';
+  o.frequency.setValueAtTime(125,t0);o.frequency.exponentialRampToValueAtTime(45,t0+0.11);
+  env(g,t0,0.002,0.19,v);o.connect(g);g.connect(master);o.start(t0);o.stop(t0+0.26);}
+function tick(t0,v){const s=AC.createBufferSource(),f=AC.createBiquadFilter(),g=AC.createGain();
+  s.buffer=noiseBuf();f.type='highpass';f.frequency.value=6500;env(g,t0,0.001,0.035,v);
+  s.connect(f);f.connect(g);g.connect(master);s.start(t0);s.stop(t0+0.06);}
+function bass(t0,fr,dur,v){const o=AC.createOscillator(),f=AC.createBiquadFilter(),g=AC.createGain();
+  o.type='triangle';o.frequency.value=fr;f.type='lowpass';f.frequency.value=380;
+  g.gain.setValueAtTime(0.0001,t0);g.gain.linearRampToValueAtTime(v,t0+0.02);g.gain.setValueAtTime(v,t0+dur-0.06);g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+  o.connect(f);f.connect(g);g.connect(master);o.start(t0);o.stop(t0+dur+0.02);}
+function sndSwallow(){if(!audioOn)return;const t0=AC.currentTime,o=AC.createOscillator(),f=AC.createBiquadFilter(),g=AC.createGain();
+  o.type='sine';o.frequency.setValueAtTime(320,t0);o.frequency.exponentialRampToValueAtTime(70,t0+0.28);
+  f.type='lowpass';f.frequency.value=900;env(g,t0,0.005,0.32,0.5);o.connect(f);f.connect(g);g.connect(master);o.start(t0);o.stop(t0+0.42);}
+function sndHeave(big){if(!audioOn)return;const t0=AC.currentTime;
+  const s=AC.createBufferSource(),f=AC.createBiquadFilter(),g=AC.createGain();s.buffer=noiseBuf();
+  f.type='bandpass';f.frequency.setValueAtTime(180,t0);f.frequency.exponentialRampToValueAtTime(big?2000:900,t0+0.5);f.Q.value=1.1;
+  g.gain.setValueAtTime(0.0001,t0);g.gain.linearRampToValueAtTime(big?1.0:0.5,t0+0.05);g.gain.exponentialRampToValueAtTime(0.0001,t0+(big?0.75:0.4));
+  s.connect(f);f.connect(g);g.connect(master);s.start(t0);s.stop(t0+0.85);
+  const o=AC.createOscillator(),gg=AC.createGain();o.type='sine';o.frequency.setValueAtTime(95,t0);o.frequency.exponentialRampToValueAtTime(28,t0+0.6);
+  env(gg,t0,0.01,0.7,big?1.0:0.5);o.connect(gg);gg.connect(master);o.start(t0);o.stop(t0+0.85);
+  if(big)restUntil=t0+1.3;}
+function audioClock(){if(!audioOn)return;const per=BEAT/1000;
+  while(nbeat<AC.currentTime+0.12){
+    if(nbeat>restUntil){const b=bi%4;
+      if(b===0||b===2)kick(nbeat,0.75);else tick(nbeat,0.2);
+      tick(nbeat+per*0.5,0.12);
+      if(b===0)bass(nbeat,41.2,per*0.95,0.16+sick*0.12);}
+    nbeat+=per;bi++;}}
+function initAudio(){if(audioOn)return;try{
+  AC=new (window.AudioContext||window.webkitAudioContext)();
+  master=AC.createGain();master.gain.value=0.45;master.connect(AC.destination);
+  audioOn=true;nbeat=AC.currentTime+0.1;if(AC.resume)AC.resume();
+  setInterval(audioClock,25);
+}catch(e){console.error('audio',e);}}
+
+// ── WebGL: 리퀴드 글래스 (v8) ──
+const gl=glc.getContext('webgl');
+const VS=`attribute vec2 p;varying vec2 v;void main(){v=p*0.5+0.5;gl_Position=vec4(p,0.,1.);}`;
+const FS=`precision highp float;varying vec2 v;
+uniform sampler2D tex;uniform float uT,uW,uSick;uniform vec2 uRes;
+float hash(vec2 p){return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453);}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+ float a=hash(i),b=hash(i+vec2(1,0)),c=hash(i+vec2(0,1)),d=hash(i+vec2(1,1));
+ return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);}
+float fbm(vec2 p){float s=0.,m=0.5;for(int i=0;i<5;i++){s+=m*noise(p);p=p*2.02+vec2(1.7);m*=0.5;}return s;}
+vec3 samp(vec2 u){return texture2D(tex,vec2(u.x,1.-u.y)).rgb;}
+float ht(vec2 uv){float t=uT*0.11;
+ float h=fbm(uv*3.1+vec2(t,-t*0.7));
+ h+=0.5*fbm(uv*7.5-vec2(t*0.55,t*0.9));
+ h+=(uW+uSick*0.2)*0.55*sin(length(uv-0.5)*44.0-uT*24.0);
+ return h;}
+void main(){vec2 uv=v;vec2 e=1.4/uRes;
+ float h=ht(uv);
+ float hpx=ht(uv+vec2(e.x,0.)),hmx=ht(uv-vec2(e.x,0.));
+ float hpy=ht(uv+vec2(0.,e.y)),hmy=ht(uv-vec2(0.,e.y));
+ vec2 n=vec2(hpx-hmx,hpy-hmy)*7.0;
+ float lap=(hpx+hmx+hpy+hmy-4.0*h);
+ float rs=0.0055+uW*0.016;
+ vec2 ruv=uv-n*rs;
+ vec3 col=vec3(samp(ruv-n*0.0024).r,samp(ruv).g,samp(ruv+n*0.0024).b);
+ float caus=smoothstep(0.006,0.028,lap);
+ float dark=1.0-smoothstep(0.15,0.6,dot(col,vec3(0.33)));
+ col+=vec3(0.93,0.89,0.78)*caus*dark*0.30;
+ vec2 L=normalize(vec2(0.4,-0.9));
+ float sp=pow(max(0.,dot(normalize(n+1e-5),L)),6.0);
+ float streak=pow(max(0.,1.0-abs(n.y)*2.2),2.0);
+ col+=vec3(1.0,0.98,0.93)*sp*streak*(0.14+uW*0.08);
+ float edge=smoothstep(0.10,0.42,length(n));
+ col+=vec3(0.95,0.94,0.9)*edge*0.05;
+ vec3 g4=vec3(0.);for(int i=0;i<6;i++){float a=float(i)*1.05;vec2 o=vec2(cos(a),sin(a))*0.004;vec3 s=samp(ruv+o);g4+=s*max(0.,s.r-s.g-0.15);}
+ col+=g4*vec3(0.9,0.12,0.05)*0.5;
+ float lm=dot(col,vec3(0.333));
+ col=mix(col*vec3(0.92,0.97,1.08),col*vec3(1.05,1.0,0.93),smoothstep(0.1,0.6,lm));
+ col*=mix(vec3(1.0),vec3(1.06,0.96,0.93),uSick*0.5); // 하루가 저물수록 붉게 앓는다
+ col+=(hash(uv*uRes+fract(uT)*71.0)-0.5)*0.014;
+ float vig=smoothstep(1.55,0.42,length(uv-0.5)*1.3);col*=mix(0.8,1.0,vig);
+ gl_FragColor=vec4(col,1.);}`;
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);
+  if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))console.error('shader',gl.getShaderInfoLog(o));return o;}
+const prog=gl.createProgram();gl.attachShader(prog,sh(gl.VERTEX_SHADER,VS));gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,FS));gl.linkProgram(prog);gl.useProgram(prog);
+const buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+const pl=gl.getAttribLocation(prog,'p');gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,2,gl.FLOAT,false,0,0);
+const tx=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tx);
+[[gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE],[gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR]].forEach(([k,val])=>gl.texParameteri(gl.TEXTURE_2D,k,val));
+const uT=gl.getUniformLocation(prog,'uT'),uW=gl.getUniformLocation(prog,'uW'),uS=gl.getUniformLocation(prog,'uSick'),uR=gl.getUniformLocation(prog,'uRes');
+
+let started;
+function loop(now){
+  if(!started)started=now;
+  if(now-stepStart>=curBeats*BEAT)advance(now);
+  const t=(now-stepStart)/1000;
+  try{ curFn(t); }catch(e){ console.error('draw',e); }
+  gl.bindTexture(gl.TEXTURE_2D,tx);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,oc);
+  warp+=(targetWarp-warp)*0.04; warp*=0.94; targetWarp*=0.97;
+  nausea+=(pTarget-nausea)*0.05; pTarget*=0.985;
+  gl.viewport(0,0,glc.width,glc.height);
+  gl.uniform1f(uT,(now-started)/1000);gl.uniform1f(uW,Math.max(warp,targetWarp));gl.uniform1f(uS,sick);gl.uniform2f(uR,glc.width,glc.height);
+  gl.drawArrays(gl.TRIANGLES,0,3);
+  requestAnimationFrame(loop);
+}
+
+// ── WS ──
+const ws=new WebSocket(`ws://${location.host}/ws`);
+ws.onmessage=(ev)=>{ let m; try{m=JSON.parse(ev.data);}catch{return;}
+  if(m.t==='reading')onReading(m);
+  else if(m.t==='verdict')onVerdict(m);
+  else if(m.t==='gulp')onGulp(m);
+  else if(m.t==='movement')movement=m.name||'정독';
+  else if(m.t==='state'){const p=Math.min(1,m.pressure||0),fl=Math.min(1,m.fill||0);targetWarp=Math.max(targetWarp,p);pTarget=Math.max(pTarget,Math.max(p,fl));sick=Math.min(1,(m.fatigue||0)/10);}
+  else if(m.t==='inner'&&m.text)marg=m.text;
+  else if(m.t==='think'){think+=m.d;if(think.length>6000)think=think.slice(-6000);}
+  // think_reset 무시 — 사고는 게울 때까지 쌓여 화면을 채운다 (차오르는 구토감)
+  // frame/cur/nav/journey/chew — 이 언어에선 쓰지 않음
+};
+addEventListener('resize',resize);
+document.fonts.ready.then(()=>{stepStart=performance.now();initAudio();requestAnimationFrame(loop);});
+// autoplay 막히면 첫 상호작용에 살아남게 (전시 키오스크는 플래그로 자동)
+addEventListener('pointerdown',()=>{initAudio();if(AC&&AC.resume)AC.resume();},{once:true});
+addEventListener('keydown',()=>{initAudio();if(AC&&AC.resume)AC.resume();},{once:true});
+</script>
+</body>
+</html>

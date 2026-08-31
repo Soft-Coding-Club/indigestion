@@ -1,0 +1,34 @@
+import http from "node:http";
+import { readFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
+import { chromium } from "playwright";
+const html=readFileSync(new URL("../public/renderer.html",import.meta.url),"utf8");
+const server=http.createServer((q,r)=>{const p=(q.url||"/").split("?")[0];
+ if(p.startsWith("/vendor/")){const fp=fileURLToPath(new URL("../public"+p,import.meta.url));
+  if(existsSync(fp)){r.writeHead(200);r.end(readFileSync(fp));return;}}
+ r.writeHead(200,{"content-type":"text/html; charset=utf-8"});r.end(html);});
+const wss=new WebSocketServer({server,path:"/ws"});const cl=new Set();
+wss.on("connection",w=>{cl.add(w);w.on("close",()=>cl.delete(w));});
+const send=o=>{const s=JSON.stringify(o);for(const c of cl)if(c.readyState===1)c.send(s);};
+await new Promise(r=>server.listen(4779,r));
+const b=await chromium.launch({channel:'chrome',headless:false});
+const pg=await b.newPage({viewport:{width:1600,height:900}});
+pg.on("pageerror",e=>console.log("ERR:",String(e).slice(0,140)));
+await pg.goto("http://localhost:4779/"); await pg.waitForTimeout(1200);
+// 계속 먹인다 — 쌓여서 역류가 나는지
+const feed=["nobody wants you here you pathetic waste of oxygen",
+            "you are the reason your family stopped calling",
+            "everyone talks about how insufferable you are",
+            "just stop breathing our air already honestly"];
+for(let k=0;k<4;k++){
+  send({t:"reading",text:feed[k]});
+  await pg.waitForTimeout(2200);
+  const st=await pg.evaluate(()=>({n:letters.length,load:+stomachLoad.toFixed(2),dir:canalDir,purge:+purge.toFixed(2)}));
+  console.log(JSON.stringify(st));
+  await pg.screenshot({path:`out/pile-${k}.png`});
+}
+await pg.waitForTimeout(2500);
+console.log(JSON.stringify(await pg.evaluate(()=>({n:letters.length,load:+stomachLoad.toFixed(2),dir:canalDir}))));
+await pg.screenshot({path:"out/pile-final.png"});
+await b.close(); await new Promise(r=>server.close(r)); process.exit(0);

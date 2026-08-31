@@ -1,0 +1,10 @@
+import { chromium } from "playwright";
+const b=await chromium.launch({channel:'chrome',headless:false});
+const pg=await b.newPage({viewport:{width:1440,height:900}});
+await pg.goto("https://indigestion.vercel.app/"); await pg.waitForTimeout(6000);
+const before=await pg.evaluate(()=>!!document.fullscreenElement);
+await pg.mouse.click(700,500); await pg.waitForTimeout(2500);
+const after=await pg.evaluate(()=>({fs:!!document.fullscreenElement,w:innerWidth,h:innerHeight,cw:document.getElementById('gl').width}));
+console.log("클릭 전 fullscreen:",before,"| 클릭 후:",JSON.stringify(after));
+await pg.screenshot({path:"out/fs-check.png"});
+await b.close(); process.exit(0);

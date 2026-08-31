@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>구토</title>
+<!-- 오프라인 번들 — 전시장 네트워크가 죽어도 서체는 로컬에 있다 -->
+<link href="/vendor/noto-serif-kr.css" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;background:#04050A;height:100%;overflow:hidden;cursor:none}
+  canvas{display:block;position:fixed;inset:0;width:100vw;height:100vh}
+  #ev{pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="ev"></canvas>
+<script>
+// ── 「구토」 — 유동하는 유리. 진짜 엔진이 유리를 움직인다. ──
+const glc=document.getElementById('gl');
+// 말은 유리 뒤에 있다. 오프스크린 캔버스가 그 평면이고, 셰이더가 유리 너머로 읽는다.
+const tc=document.createElement('canvas'), T=tc.getContext('2d');
+// 증거의 층 — 유리를 통과하지 않는다. 작품의 목소리가 아니라 기계의 기록.
+const evc=document.getElementById('ev'), E=evc.getContext('2d');
+let DPR;
+function resize(){DPR=Math.min(1.4,devicePixelRatio||1);
+  glc.width=tc.width=evc.width=Math.round(innerWidth*DPR);
+  glc.height=tc.height=evc.height=Math.round(innerHeight*DPR);
+  glc.style.width=evc.style.width=innerWidth+'px';
+  glc.style.height=evc.style.height=innerHeight+'px';}
+resize();
+const W=()=>tc.width,H=()=>tc.height;
+
+// ── 상태 (엔진이 몬다) ──
+let toxin=0, toxT=0, fatigue=0, purge=0, breath=0, movement='정독';
+let clar=0, clarT=0;   // 소화됨 — 삼킨 말이 읽히는 정도
+// ── 표시 텍스트 (전부 크로스페이드) ──
+let engT='',koT='',smallT='',engC='',koC='',smallC='',engA=0,koA=0,smallA=0;
+let think='', margT='', margA=0;
+let sub='r/AmItheAsshole';           // 캡션은 설명하지 않는다 — 사실만 증언한다
+// 증거 — 이것이 지금 진짜 인터넷을 먹고 있다는 최소한의 증언
+let navUrl='', navAt=0, engRaw='', engRawAt=0;
+const clock=()=>new Date(Date.now()+9*3600e3).toISOString().slice(11,19);
+const scars=[];                      // 결손: 게워낸 자리. 읽을 수 없게 된 채로 남는다.
+let wound=null;                      // 상처: 삼키다 만 문장에 제자리에서 곪는 영어
+let holdUntil=0;                    // 이 시각까지는 텍스트를 유지
+function fade(cur,tgt,a,dt){return cur!==tgt?Math.max(0,a-dt*2.6):Math.min(1,a+dt*1.8);}
+
+// HTML 엔티티 디코드 + 문장부호 토큰 제거 (레딧 원문 정리)
+function dec(s){const t=document.createElement('textarea');t.innerHTML=String(s||'');return t.value;}
+function clean(s){return dec(s).replace(/\s+/g,' ').trim();}
+function clipWords(s,n){return clean(s).split(' ').filter(w=>/[A-Za-z0-9가-힣]/.test(w)).slice(0,n).join(' ');}
+function wrap(text,fs,maxW,font){
+  T.font=font.replace('%',fs);
+  const ws=clean(text).split(' ');const out=[];let line='';
+  for(const w of ws){if(T.measureText(line+w+' ').width>maxW){if(line)out.push(line.trim());line='';}line+=w+' ';}
+  if(line.trim())out.push(line.trim());
+  return out.slice(0,4);
+}
+function drawLines(lines,fs,font,color,cy){
+  T.font=font.replace('%',fs);T.fillStyle=color;T.textAlign='center';
+  const lh=fs*1.28, y0=cy-(lines.length-1)*lh/2;
+  lines.forEach((l,i)=>T.fillText(l,W()*0.5,y0+i*lh));
+}
+const F_SANS=`500 %px "Helvetica Neue",Arial,sans-serif`;
+// 기념비 — 소화된 문장은 화면보다 크게 선다. 가장자리에서 잘리는 것까지가 조판이다.
+function drawMonument(text,alpha){
+  let fs=H()*0.30, lines=[];
+  const maxLines=text.length>30?3:2;
+  for(;fs>H()*0.085;fs*=0.92){
+    lines=wrap(text,fs,W()*1.03,F_KO);
+    if(lines.length<=maxLines&&lines.length*fs*1.18<H()*0.86)break;
+  }
+  const f=F_KO.replace('600','700').replace('%',fs);
+  T.font=f;T.textAlign='left';
+  const lh=fs*1.18, y0=H()*0.54-(lines.length-1)*lh/2+fs*0.32;
+  const x=-W()*0.015;
+  T.fillStyle=`rgba(242,236,224,${(0.96*alpha).toFixed(3)})`;
+  lines.forEach((l,i)=>T.fillText(l,x,y0+i*lh));
+  // 상처 — 삼키다 만 자리. 영어가 글자를 문 채 제자리에서 곪는다.
+  if(wound&&wound.for===text){
+    const li=lines.length-1, ly=y0+li*lh;
+    T.font=f;
+    const lw=T.measureText(lines[li]).width;
+    const wx=Math.min(x+lw*0.74,W()*0.76), wfs=Math.max(fs*0.38,H()*0.06);
+    // 멍 — 유일한 유채색. 유리가 이걸 굴절시켜 번지게 한다.
+    for(const [ox,oy,r,a0] of [[0,0,2.6,0.30],[wfs*0.5,wfs*0.25,1.7,0.22]]){
+      const g=T.createRadialGradient(wx+ox,ly-wfs*0.3+oy,0,wx+ox,ly-wfs*0.3+oy,wfs*r);
+      g.addColorStop(0,`rgba(210,37,26,${(a0*alpha).toFixed(3)})`);
+      g.addColorStop(1,'rgba(210,37,26,0)');
+      T.fillStyle=g;T.fillRect(wx-wfs*3,ly-wfs*3,wfs*6,wfs*6);
+    }
+    T.save();T.translate(wx,ly);T.rotate(-0.08);
+    T.font=`900 ${Math.round(wfs)}px "Helvetica Neue",Arial,sans-serif`;
+    T.globalCompositeOperation='destination-out';       // 이빨 — 명조를 지운다
+    T.lineWidth=wfs*0.10;T.strokeStyle='#000';T.strokeText(wound.word,2,2);T.fillText(wound.word,2,2);
+    T.globalCompositeOperation='source-over';
+    T.fillStyle=`rgba(226,216,200,${(0.92*alpha).toFixed(3)})`;
+    T.fillText(wound.word,0,0);
+    T.restore();
+  }
+}
+const F_KO=`600 %px "Noto Serif KR",serif`;
+const F_MONO=`400 %px ui-monospace,Menlo,monospace`;
+
+function drawType(dt){
+  // 말의 평면: 검은 바탕에 빛나는 글자. 유리를 통과한 광선만 이걸 본다.
+  T.fillStyle='#000';T.fillRect(0,0,W(),H());
+  T.textBaseline='alphabetic';T.textAlign='center';
+  // 배경 substrate: 날것의 사고 — 구토감이 오를수록 차올라 화면을 덮는다
+  if(think){
+    const fs=Math.round(H()*0.024), lh=fs*1.5, maxW=W()*0.9, x=W()*0.05;
+    T.font=F_MONO.replace('%',fs);T.textAlign='left';
+    T.fillStyle=`rgba(190,200,225,${(0.07+toxin*0.16).toFixed(3)})`;
+    const lines=[];let line='';
+    for(const w of think.replace(/\s+/g,' ').split(' ')){
+      if(T.measureText(line+w+' ').width>maxW){lines.push(line);line='';}
+      line+=w+' ';}
+    if(line)lines.push(line);
+    const cover=0.12+toxin*0.80;
+    const show=lines.slice(-Math.max(1,Math.floor(H()*cover/lh)));
+    let y=H()-H()*0.04-(show.length-1)*lh;
+    for(const l of show){T.fillText(l,x,y);y+=lh;}
+    T.textAlign='center';
+  }
+  // ── 결손: 게워낸 말이 뜯겨나간 자리 ──
+  // 글자가 있던 만큼의 획이 남되, 끝내 읽히지 않는다. 하루 종일 쌓인다.
+  for(const s of scars){
+    T.save();T.translate(s.x*W(),s.y*H());T.rotate(s.rot);
+    T.fillStyle=`rgba(216,196,186,${s.a.toFixed(3)})`;
+    let ox=0;
+    for(const w of s.w){
+      const bw=w*H()*0.030, bh=H()*0.030;
+      T.fillRect(ox,-bh*0.72,bw,bh*0.16);          // 뜯긴 자리의 잔획
+      T.fillRect(ox,-bh*0.12,bw*0.62,bh*0.13);
+      ox+=bw+H()*0.012;
+    }
+    T.restore();
+  }
+  // 세상의 말 (영어)
+  if(engC!==engT&&engA<=0)engC=engT; engA=fade(engC,engT,engA,dt);
+  if(engC&&engA>0.01){const fs=H()*0.052;
+    drawLines(wrap(engC,fs,W()*0.82,F_SANS),fs,F_SANS,`rgba(255,255,255,${(0.92*engA).toFixed(3)})`,H()*0.5);}
+  // 몸의 말 (한국어 번역)
+  if(koC!==koT&&koA<=0)koC=koT; koA=fade(koC,koT,koA,dt);
+  if(koC&&koA>0.01)drawMonument(koC,koA);
+  // 구역의 목소리 (marginalia) — 게움 직후
+  margA=Math.max(0,margA-dt*0.42);
+  if(margT&&margA>0.01){const fs=H()*0.036;
+    drawLines(wrap(margT,fs,W()*0.72,F_KO),fs,F_KO,`rgba(255,226,220,${(0.88*Math.min(1,margA)).toFixed(3)})`,H()*0.74);}
+  // 캡션 — 사실처럼 보이지만 아무것도 설명하지 않는다
+  if(smallC!==smallT&&smallA<=0)smallC=smallT; smallA=fade(smallC,smallT,smallA,dt);
+  if(smallC&&smallA>0.01){T.font=F_MONO.replace('%',H()*0.019);
+    T.fillStyle=`rgba(255,255,255,${(0.40*smallA).toFixed(3)})`;T.fillText(smallC,W()*0.5,H()*0.945);}
+}
+
+// ── 증거의 층: 지금 진짜 인터넷을 먹고 있다는 최소한의 증언 ──
+const MODEL='deepseek-ai/DeepSeek-V4-Flash-0731';
+function drawEvidence(now){
+  E.clearRect(0,0,W(),H());
+  const m=H()*0.045;
+  E.textBaseline='alphabetic';E.textAlign='left';
+  // 유일한 증거: 방금 삼킨 원문. 유리에서 뭉개진 그 말이 실제로 이 문장이었다.
+  const age=(now-engRawAt)/1000;
+  if(engRaw&&age<8.0){
+    const a=Math.min(1,age*2.0)*Math.min(1,(8.0-age)*0.8);
+    const fs=Math.round(H()*0.018);
+    E.font=F_MONO.replace('%',fs);
+    E.fillStyle=`rgba(255,255,255,${(0.55*a).toFixed(3)})`;
+    const maxW=W()-m*2;let line='',out=[];
+    for(const w of engRaw.split(' ')){
+      if(E.measureText(line+w+' ').width>maxW){out.push(line);line='';if(out.length>=2)break;}
+      line+=w+' ';}
+    if(out.length<2&&line)out.push(line);
+    out.forEach((l,i)=>E.fillText(l.trim(),m,H()-m-(out.length-1-i)*fs*1.7));
+  }
+}
+
+// ── WebGL: 유동하는 유리 ──
+const gl=glc.getContext('webgl');
+const VS=`attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}`;
+const FS=`precision highp float;
+uniform vec2 uRes;uniform float uT,uTox,uFat,uPur,uBre;
+uniform sampler2D uWords;    // 유리 뒤에 선 말들
+uniform float uClar;         // 소화됨 — 삼킨 말은 몸을 통과해 읽을 수 있게 된다
+// 말의 평면 — 유리 뒤에 서 있다. 굴절된 광선이 그 평면을 뚫는 지점을 읽는다.
+vec3 words(vec3 ro,vec3 rd,float soft){
+  float zp=1.45;
+  vec2 straight=vec2(gl_FragCoord.x/uRes.x, 1.0-gl_FragCoord.y/uRes.y);
+  vec2 uv=straight;
+  if(rd.z>0.0001){
+    float k=(zp-ro.z)/rd.z;
+    if(k>0.0){ vec3 hit=ro+rd*k;
+      vec2 r=vec2(hit.x/(uRes.x/uRes.y),hit.y)*0.5+0.5; r.y=1.0-r.y;
+      uv=r; }
+  }
+  // 소화될수록 굴절의 왜곡이 걷히고 글자가 제자리를 찾는다
+  uv=mix(uv,straight,uClar);
+  uv=clamp(uv,0.0,1.0);
+  soft*=(1.0-uClar*0.94);
+  if(soft<0.0012) return texture2D(uWords,uv).rgb;
+  // 흐림 — 삼키지 못한 말은 유리에 갇혀 읽히지 않는다
+  vec3 s=texture2D(uWords,uv).rgb*2.0;
+  for(int i=0;i<6;i++){float a=float(i)*1.047;
+    s+=texture2D(uWords,uv+vec2(cos(a),sin(a))*soft).rgb;
+    s+=texture2D(uWords,uv+vec2(cos(a+0.5),sin(a+0.5))*soft*0.55).rgb;}
+  return s/14.0;
+}
+mat2 rot(float a){float c=cos(a),s=sin(a);return mat2(c,-s,s,c);}
+float hash(vec2 p){return fract(sin(dot(p,vec2(41.3,289.1)))*43758.5453);}
+float noise(vec3 p){vec3 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+  float n=i.x+i.y*57.+i.z*113.;
+  float a=fract(sin(n)*43758.5453),b=fract(sin(n+1.)*43758.5453),
+        c=fract(sin(n+57.)*43758.5453),d=fract(sin(n+58.)*43758.5453),
+        e=fract(sin(n+113.)*43758.5453),g=fract(sin(n+114.)*43758.5453),
+        h=fract(sin(n+170.)*43758.5453),k=fract(sin(n+171.)*43758.5453);
+  return mix(mix(mix(a,b,f.x),mix(c,d,f.x),f.y),mix(mix(e,g,f.x),mix(h,k,f.x),f.y),f.z);}
+float fbm(vec3 p){float s=0.,m=.5;for(int i=0;i<4;i++){s+=m*noise(p);p*=2.03;m*=.5;}return s;}
+float smin(float a,float b,float k){float h=clamp(0.5+0.5*(b-a)/k,0.,1.);return mix(b,a,h)-k*h*(1.-h);}
+float ringTube(vec3 p,vec3 c,vec3 axis,float R,float r){
+  vec3 q=p-c;vec3 a=normalize(axis);float y=dot(q,a);vec3 pr=q-a*y;
+  return length(vec2(length(pr)-R,y))-r;}
+float shape(vec3 p){
+  float t=uT*0.23;
+  float swell=1.0+uBre*0.030+uPur*0.10;
+  vec3 ax1=normalize(vec3(sin(t*0.7)*0.55,1.0,cos(t*0.55)*0.45));
+  vec3 c1=vec3(sin(t*0.5)*0.30,cos(t*0.42)*0.12,sin(t*0.33)*0.18);
+  float d1=ringTube(p,c1,ax1,(0.74+0.10*sin(t*0.9))*swell,(0.175+0.035*sin(t*1.3+1.0))*swell);
+  vec3 ax2=normalize(vec3(1.0,sin(t*0.63)*0.8,cos(t*0.47)*0.6));
+  vec3 c2=vec3(cos(t*0.61)*0.34,sin(t*0.52)*0.20,cos(t*0.39)*0.16);
+  float d2=ringTube(p,c2,ax2,(0.66+0.12*cos(t*0.75))*swell,(0.155+0.030*cos(t*1.1))*swell);
+  vec3 ax3=normalize(vec3(sin(t*1.1)*0.9,cos(t*0.9)*0.5,1.0));
+  float d3=ringTube(p,vec3(0.),ax3,(0.90+0.06*sin(t*1.4))*swell,(0.075+0.02*sin(t*2.0))*swell);
+  float k=0.30+0.18*sin(uT*0.31)+uTox*0.22;
+  float d=smin(d1,d2,k);
+  d=smin(d,d3,0.16+0.10*sin(uT*0.27+1.5)+uTox*0.10);
+  return d;}
+float map(vec3 p){p.xz*=rot(uT*0.08);p.xy*=rot(sin(uT*0.06)*0.16);return shape(p);}
+vec3 nrm(vec3 p){vec2 e=vec2(0.0012,0.);
+  return normalize(vec3(map(p+e.xyy)-map(p-e.xyy),map(p+e.yxy)-map(p-e.yxy),map(p+e.yyx)-map(p-e.yyx)));}
+float march(vec3 ro,vec3 rd,float far){float t=0.02;
+  for(int i=0;i<110;i++){float d=map(ro+rd*t);if(d<0.001)return t;t+=d*0.78;if(t>far)break;}return -1.;}
+float marchIn(vec3 ro,vec3 rd){float t=0.004;
+  for(int i=0;i<48;i++){float d=-map(ro+rd*t);if(d<0.001)return t;t+=max(d*0.85,0.003);if(t>3.5)break;}return t;}
+float ao(vec3 p,vec3 n){float s=0.,w=1.;
+  for(int i=1;i<=5;i++){float d=0.05*float(i);s+=w*(d-map(p+n*d));w*=0.6;}
+  return clamp(1.0-2.8*s,0.,1.);}
+vec3 env(vec3 rd){
+  float y=rd.y;
+  vec3 c=mix(vec3(0.006,0.008,0.014),vec3(0.016,0.026,0.052),smoothstep(-0.40,0.92,y));
+  c=mix(c,vec3(0.010,0.006,0.012),uFat*0.55);
+  // 스튜디오 조명을 끈다 — 병든 몸 안엔 소프트박스가 없다. 형태를 겨우 드러낼 단 하나의 흐린 빛만.
+  float s1=smoothstep(0.30,0.015,abs(y-0.52))*smoothstep(0.60,0.08,abs(rd.x+0.42));
+  c+=vec3(0.62,0.58,0.50)*pow(s1,0.95)*0.85;
+  float s2=smoothstep(0.15,0.008,abs(y-0.02))*smoothstep(0.28,0.02,abs(rd.x-0.73));
+  c+=vec3(0.40,0.46,0.58)*pow(s2,1.0)*0.34;
+  float s3=smoothstep(0.44,0.06,abs(y+0.44))*smoothstep(0.95,0.2,abs(rd.x-0.15));
+  c+=vec3(0.20,0.22,0.32)*s3*0.12;
+  c*=0.90+0.20*fbm(rd*6.0+vec3(0.,0.,uT*0.015));
+  float warm=smoothstep(0.55,0.0,abs(y+0.28))*smoothstep(1.15,0.12,abs(rd.x-0.05));
+  c+=vec3(1.0,0.28,0.09)*warm*(0.05+uTox*0.95);
+  return c;}
+vec3 envRough(vec3 r,float rough,vec3 tg){
+  if(rough<0.002)return env(r);
+  vec3 t1=normalize(cross(r,tg)+1e-5),t2=normalize(cross(r,t1));
+  float ax=rough*2.4,ay=rough*0.7;
+  vec3 s=env(r)*1.4;
+  s+=env(normalize(r+t1*ax))+env(normalize(r-t1*ax));
+  s+=env(normalize(r+t2*ay))+env(normalize(r-t2*ay));
+  s+=env(normalize(r+t1*ax*.5+t2*ay*.5))+env(normalize(r-t1*ax*.5-t2*ay*.5));
+  return s/(1.4+6.0);}
+void main(){
+  vec2 uv=(gl_FragCoord.xy*2.0-uRes)/uRes.y;
+  vec3 ro=vec3(0.,0.,-3.4),rd=normalize(vec3(uv,1.85));
+  float t=march(ro,rd,9.0);
+  vec3 col;
+  if(t<0.0){
+    col=env(rd);
+    // 유리를 비껴간 광선이 만나는 말 — 굴절 없이 지나가므로 흐릿하게만 어른거린다
+    col+=words(ro,rd,0.010+uTox*0.012)*(0.30-uTox*0.12+uClar*1.35);
+    float sh=march(ro+rd*4.6,normalize(vec3(-0.45,0.72,-0.5)),6.0);
+    if(sh>0.0){float cau=pow(max(0.,1.0-length(uv)*0.55),3.0);
+      col*=mix(1.0,0.55,cau*0.55);
+      col+=vec3(0.55,0.70,1.0)*cau*0.06;
+      col+=vec3(1.0,0.25,0.10)*cau*uTox*0.20;}
+    col+=vec3(0.28,0.48,1.0)*exp(-length(uv)*1.5)*0.05;
+  }else{
+    vec3 p=ro+rd*t,n=nrm(p);
+    float occ=ao(p,n);
+    vec3 tg=normalize(cross(n,vec3(0.,0.,1.))+1e-4);
+    float rough=0.008+uFat*0.08+uPur*0.04;
+    float f0=0.055;
+    float fres=f0+(1.0-f0)*pow(1.0-max(0.,dot(-rd,n)),5.0);
+    vec3 tr;float thick=0.0;
+    vec3 r1=refract(rd,n,1.0/1.49);
+    if(length(r1)<0.001){tr=envRough(reflect(rd,n),rough,tg);}
+    else{
+      vec3 dir=r1,pos=p+r1*0.003;vec3 acc=vec3(0.);float att=1.0;bool esc=false;
+      for(int b=0;b<3;b++){
+        float d=marchIn(pos,dir);thick+=d;
+        vec3 q=pos+dir*d;vec3 n2=-nrm(q);
+        vec3 or_=refract(dir,n2,1.42),og=refract(dir,n2,1.49),ob=refract(dir,n2,1.56);
+        if(length(og)>0.001){
+          acc+=vec3(envRough(or_,rough,tg).r,envRough(og,rough,tg).g,envRough(ob,rough,tg).b)*att;
+          // ── 말은 유리를 통과해야 읽힌다 ──
+          // 두꺼운 곳을 지날수록, 독이 오를수록 흐려진다. 읽기는 소화다.
+          float soft=thick*0.011+uTox*0.016+uPur*0.05;
+          vec3 wr=words(q,or_,soft), wg=words(q,og,soft), wb=words(q,ob,soft);
+          acc+=vec3(wr.r,wg.g,wb.b)*att*(1.9-uTox*0.5);
+          esc=true;break;}
+        dir=reflect(dir,n2);pos=q+dir*0.003;att*=0.86;}
+      if(!esc){acc+=envRough(dir,rough,tg)*att*0.7;
+        acc+=words(pos,dir,0.03+uTox*0.03)*att*0.6;}   // 갇힌 광선이 본 말 — 거의 읽히지 않는다
+      vec3 tint=mix(vec3(0.90,0.965,1.0),vec3(1.0,0.30,0.14),clamp(uTox,0.,1.));
+      tr=acc*exp(-(1.0-tint)*thick*2.9);}
+    vec3 refl=envRough(reflect(rd,n),rough,tg);
+    col=mix(tr,refl,clamp(fres*1.05,0.,1.));
+    vec3 L1=normalize(vec3(-0.55,0.80,-0.45)),L2=normalize(vec3(0.75,0.10,-0.30));
+    float shp=exp2(11.5*(1.0-rough));
+    col+=vec3(1.0,0.99,0.96)*pow(max(0.,dot(reflect(-L1,n),-rd)),shp)*1.7;
+    col+=vec3(0.78,0.87,1.0)*pow(max(0.,dot(reflect(-L2,n),-rd)),shp*0.55)*0.75;
+    col+=vec3(0.9,0.95,1.0)*pow(fres,1.6)*0.18;
+    col*=mix(0.70,1.0,occ);
+    col+=vec3(1.0,0.14,0.05)*uPur*fres*1.35;
+  }
+  float glare=exp(-abs(uv.y)*9.0)*exp(-abs(uv.x)*0.6);
+  col+=vec3(0.55,0.72,1.0)*glare*0.035*(0.4+uTox);
+  col*=1.06;
+  col=(col*(2.51*col+0.03))/(col*(2.43*col+0.59)+0.14);
+  col=pow(max(col,0.0),vec3(1.0/2.2));
+  float lens=length(uv)*0.0018;col.r*=1.0+lens;col.b*=1.0-lens;
+  col+=(hash(gl_FragCoord.xy+fract(uT)*91.0)-0.5)*0.016;
+  float vig=smoothstep(1.8,0.28,length(uv)*0.68);col*=mix(0.66,1.0,vig);
+  gl_FragColor=vec4(col,1.);}`;
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);
+  if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))console.error('shader',gl.getShaderInfoLog(o));return o;}
+const pr=gl.createProgram();gl.attachShader(pr,sh(gl.VERTEX_SHADER,VS));gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,FS));
+gl.linkProgram(pr);gl.useProgram(pr);
+const bf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,bf);
+gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+const pl=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,2,gl.FLOAT,false,0,0);
+const U=n=>gl.getUniformLocation(pr,n);
+// 말의 평면 텍스처
+const wordTex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,wordTex);
+[[gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE],
+ [gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR]]
+ .forEach(([k,v])=>gl.texParameteri(gl.TEXTURE_2D,k,v));
+
+// ── 사운드: 유리의 몸 (부드러운 톤 — 유리 미학에 맞춤) ──
+let AC=null,master=null,audioOn=false,droneG=null;
+function initAudio(){if(audioOn)return;try{
+  AC=new (window.AudioContext||window.webkitAudioContext)();
+  master=AC.createGain();master.gain.value=0.4;master.connect(AC.destination);
+  // 낮은 드론 — 몸이 살아있다는 바탕
+  const o1=AC.createOscillator(),o2=AC.createOscillator(),f=AC.createBiquadFilter();
+  droneG=AC.createGain();droneG.gain.value=0.05;
+  o1.type='sine';o1.frequency.value=41.2;o2.type='sine';o2.frequency.value=62.0;
+  f.type='lowpass';f.frequency.value=320;
+  o1.connect(f);o2.connect(f);f.connect(droneG);droneG.connect(master);
+  o1.start();o2.start();
+  audioOn=true;if(AC.resume)AC.resume();
+}catch(e){console.error('audio',e);}}
+function tone(fr,dur,v,type){if(!audioOn)return;const t0=AC.currentTime;
+  const o=AC.createOscillator(),g=AC.createGain(),f=AC.createBiquadFilter();
+  o.type=type||'sine';o.frequency.setValueAtTime(fr,t0);
+  f.type='lowpass';f.frequency.value=2400;
+  g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(v,t0+0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+  o.connect(f);f.connect(g);g.connect(master);o.start(t0);o.stop(t0+dur+0.05);}
+function sndRead(){tone(880+Math.random()*220,0.5,0.10,'sine');}       // 유리에 닿는 소리
+function sndSwallow(){if(!audioOn)return;const t0=AC.currentTime;      // 하강: 삼켜진다
+  const o=AC.createOscillator(),g=AC.createGain(),f=AC.createBiquadFilter();
+  o.type='sine';o.frequency.setValueAtTime(420,t0);o.frequency.exponentialRampToValueAtTime(88,t0+0.55);
+  f.type='lowpass';f.frequency.value=1200;
+  g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(0.28,t0+0.03);
+  g.gain.exponentialRampToValueAtTime(0.0001,t0+0.7);
+  o.connect(f);f.connect(g);g.connect(master);o.start(t0);o.stop(t0+0.8);}
+function sndPurge(big){if(!audioOn)return;const t0=AC.currentTime;
+  const n=AC.createBufferSource(),nb=AC.createBuffer(1,AC.sampleRate*0.9,AC.sampleRate);
+  const d=nb.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=(Math.random()*2-1)*(1-i/d.length);
+  n.buffer=nb;
+  const f=AC.createBiquadFilter();f.type='bandpass';f.Q.value=1.2;
+  f.frequency.setValueAtTime(160,t0);f.frequency.exponentialRampToValueAtTime(big?2200:800,t0+0.6);
+  const g=AC.createGain();g.gain.setValueAtTime(0.0001,t0);
+  g.gain.linearRampToValueAtTime(big?0.85:0.4,t0+0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001,t0+(big?0.95:0.5));
+  n.connect(f);f.connect(g);g.connect(master);n.start(t0);n.stop(t0+1.0);
+  const o=AC.createOscillator(),gg=AC.createGain();o.type='sine';
+  o.frequency.setValueAtTime(110,t0);o.frequency.exponentialRampToValueAtTime(26,t0+0.7);
+  gg.gain.setValueAtTime(0.0001,t0);gg.gain.linearRampToValueAtTime(big?0.7:0.32,t0+0.04);
+  gg.gain.exponentialRampToValueAtTime(0.0001,t0+0.9);
+  o.connect(gg);gg.connect(master);o.start(t0);o.stop(t0+1.0);}
+
+// ── 엔진 이벤트 → 유리 ──
+function onReading(m){
+  const txt=clean(m.text);
+  if(!txt)return;
+  clarT=0;                           // 아직 삼키지 않은 말 — 유리에 갇힌다
+  if(m.memory){ koT=txt.slice(0,80); engT=''; smallT=`위장에 남은 것, ${sub}`; }
+  else { engT=txt.length>150?txt.slice(0,150)+'…':txt; koT='';
+         smallT=`댓글, ${sub}, ${txt.length}자`;
+         engRaw=txt.length>180?txt.slice(0,180)+'…':txt;   // 증거: 원문 그대로
+         engRawAt=performance.now(); }
+  sndRead();
+}
+function onVerdict(m){
+  toxT=Math.min(1,(m.toxin||0)/7);
+  if(m.marginalia){margT=clean(m.marginalia);}
+  if(m.v==='SWALLOW'){
+    sndSwallow();
+    koT=clean(m.translation||'')||clipWords(m.text,12); engT='';
+    smallT=`한국어로 옮겨짐, ${koT.length}자`;
+    margA=0; wound=null;
+    clarT=1;                         // 소화된 말은 읽힌다
+  }else if(m.v==='GAG'){
+    sndPurge(false);
+    purge=Math.max(purge,0.55); smallT=`삼키다 만 것, ${sub}`;
+    margA=2.2;
+    // 삼키다 만 문장 — 반쯤만 맑아지고, 소화 안 된 단어가 제자리에서 곪는다
+    koT=clean(m.translation||'')||''; engT='';
+    const jam=(clean(m.text).match(/[A-Za-z']{3,}/g)||[]).sort((a,b)=>b.length-a.length)[0]||'';
+    wound=(koT&&jam)?{word:jam.toUpperCase().slice(0,9),for:koT}:null;
+    clarT=koT?0.55:0;
+  }else if(m.v==='PURGE'){
+    sndPurge(true);
+    purge=1.0; toxT=1.0; engT=''; koT=''; wound=null;
+    think='';                        // 게움 = 사고까지 게워낸다
+    margA=4.5;                       // 구역의 목소리가 오래 남는다
+    clarT=0; clar=0;                 // 게운 말은 끝내 읽히지 않는다
+    // 결손 — 게워낸 말의 자리가 뜯긴 채 남는다
+    const ejected=((m.matter&&m.matter.length)?m.matter.join(' '):clean(m.text));
+    const ws=ejected.split(' ').filter(w=>/[A-Za-z0-9]/.test(w)).slice(0,5).map(w=>Math.min(6,w.length)*0.5);
+    if(ws.length){
+      scars.push({w:ws, x:0.10+Math.random()*0.62, y:0.16+Math.random()*0.68,
+                  rot:(Math.random()-0.5)*0.18, a:0.30});
+      while(scars.length>26)scars.shift();
+      for(const s of scars)s.a=Math.max(0.055,s.a*0.90);   // 오래된 자국은 옅어지되 사라지지 않는다
+    }
+    smallT=`게워냄 ${scars.length}회째`;
+  }
+}
+function onGulp(m){ engT=clipWords(m.text,10); koT='';
+  smallT=`씹지 않고, ${sub}`; sndRead(); }
+
+// ── 루프 ──
+let last=0,started=0;
+function loop(now){
+  if(!started)started=now;
+  const dt=Math.min(0.05,(now-(last||now))/1000); last=now;
+  toxin+=(toxT-toxin)*Math.min(1,dt*1.1);
+  purge*=Math.pow(0.35,dt);
+  // 소화: 천천히 맑아졌다가 아주 천천히 다시 흐려진다
+  clar+=(clarT-clar)*Math.min(1,dt*(clarT>clar?0.9:0.30));
+  clarT*=Math.pow(0.90,dt);
+  breath=Math.sin((now-started)/1000*0.55)*0.5+0.5;
+  if(droneG)droneG.gain.value=0.035+toxin*0.05+purge*0.05;
+  drawType(dt);
+  drawEvidence(now);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,wordTex);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,tc);
+  gl.uniform1i(U('uWords'),0);
+  gl.viewport(0,0,glc.width,glc.height);
+  gl.uniform2f(U('uRes'),glc.width,glc.height);gl.uniform1f(U('uT'),(now-started)/1000);
+  gl.uniform1f(U('uTox'),toxin);gl.uniform1f(U('uFat'),fatigue);
+  gl.uniform1f(U('uPur'),purge);gl.uniform1f(U('uBre'),breath);gl.uniform1f(U('uClar'),clar);
+  gl.drawArrays(gl.TRIANGLES,0,3);
+  requestAnimationFrame(loop);
+}
+
+// ── WS ──
+const ws=new WebSocket(`ws://${location.host}/ws`);
+ws.onmessage=(ev)=>{ let m; try{m=JSON.parse(ev.data);}catch{return;}
+  if(m.t==='reading')onReading(m);
+  else if(m.t==='verdict')onVerdict(m);
+  else if(m.t==='gulp')onGulp(m);
+  else if(m.t==='movement'){movement=m.name||'정독';
+    if(movement==='침묵'){engT='';koT='';smallT=scars.length?`게워낸 자리 ${scars.length}곳`:'';}}
+  else if(m.t==='nav'){navUrl=String(m.url||'');navAt=performance.now();
+    const mm=navUrl.match(/\/r\/([^/?]+)/);if(mm)sub='r/'+mm[1];}
+  else if(m.t==='state'){
+    const p=Math.min(1,m.pressure||0), fl=Math.min(1,m.fill||0);
+    toxT=Math.max(toxT*0.98, Math.max(p,fl*0.85));
+    fatigue=Math.min(1,(m.fatigue||0)/10);}
+  else if(m.t==='think'){think+=m.d;if(think.length>6000)think=think.slice(-6000);}
+  // think_reset 무시 — 사고는 게울 때까지 쌓인다
+};
+addEventListener('resize',resize);
+addEventListener('pointerdown',()=>{initAudio();if(AC&&AC.resume)AC.resume();},{once:true});
+addEventListener('keydown',()=>{initAudio();if(AC&&AC.resume)AC.resume();},{once:true});
+document.fonts.ready.then(()=>{initAudio();requestAnimationFrame(loop);});
+</script>
+</body>
+</html>

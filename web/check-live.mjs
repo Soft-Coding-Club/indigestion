@@ -1,0 +1,11 @@
+import { chromium } from "playwright";
+const browser = await chromium.launch({ channel: 'chrome', headless: false });
+const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
+const errs = [];
+page.on("console", (m) => { if (m.type() === "error") errs.push(m.text()); });
+page.on("pageerror", (e) => errs.push(String(e)));
+await page.goto("https://indigestion.vercel.app/", { waitUntil: "load" });
+await page.waitForTimeout(30000);
+await page.screenshot({ path: "out/live-check.png" });
+console.log("errors:", errs.length ? errs.slice(0,4) : "none");
+await browser.close(); process.exit(0);
