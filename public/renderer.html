@@ -267,7 +267,7 @@ function swallowLine(line,delay){
     });
     ox+=widths[i];
   });
-  while(letters.length>340)letters.shift();
+  while(letters.length>560)letters.shift();
 }
 // 긴 문장은 읽히는 길이로 잘라 여러 줄로 삼킨다
 let fedAt=0;
@@ -440,7 +440,7 @@ function stepLetters(dt,t){
   // ── 소화불량: 위에 쌓인 것이 임계를 넘으면 몸이 못 견디고 역류한다 ──
   let piled=0;
   for(const L of letters){ if(toBody(L.x,L.y)[1]>poolQY-0.05) piled++; }
-  stomachLoad+=((piled/105)-stomachLoad)*Math.min(1,dt*1.6);   // 55자 넘게 쌓이면 소화불량
+  stomachLoad+=((piled/260)-stomachLoad)*Math.min(1,dt*1.6);   // 55자 넘게 쌓이면 소화불량
   if(stomachLoad>1 && performance.now()>refluxUntil+4000){
     refluxUntil=performance.now()+REFLUX_MS;                 // 관이 뒤집힌다 (과정이 보이게 길게)
     purge=Math.max(purge,0.85);
@@ -809,7 +809,7 @@ async function startCorpus(url){
     for(const it of shuffled()){
       const venom=Math.max(0,Math.min(3,it.venom??2));
       handleMsg({t:'reading',text:it.text});
-      poison+=(0.017+venom*0.021)*(1+dayT*1.35);   // 아침 ~25초, 저녁 ~11초에 한 번
+      poison+=(0.0080+venom*0.0099)*(1+dayT*0.95); // 아침 ~60초, 저녁 ~30초에 한 번
       handleMsg({t:'state',pressure:Math.min(1,poison)});
 
       // 소화불량이 임계를 넘으면 몸이 게운다 — 원인이 있는 게움
