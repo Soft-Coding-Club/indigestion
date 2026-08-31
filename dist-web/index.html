@@ -186,7 +186,7 @@ function settle(x,y){
   // 한 점에 탑이 서지 않게 이웃으로 흘러 퍼진다
   for(let k=-3;k<=3;k++){
     const i=c+k; if(i<0||i>=SEDN) continue;
-    sedH[i]+=0.0000144*Math.exp(-k*k*0.35);
+    sedH[i]=Math.min(0.085,sedH[i]+0.0000144*Math.exp(-k*k*0.35));
   }
   sedMass=Math.min(1,sedMass+0.0000044);
 }
@@ -206,7 +206,7 @@ function slumpSed(dt){
 const sedPix=new Uint8Array(SEDN*4);
 function sedToPixels(){
   for(let i=0;i<SEDN;i++){
-    const v=Math.max(0,Math.min(1,sedH[i]/0.075));
+    const v=Math.max(0,Math.min(1,sedH[i]/0.09));
     sedPix[i*4]=Math.round(v*255); sedPix[i*4+3]=255;
   }
 }
@@ -557,17 +557,22 @@ void main(){
     float surf=exp(-se*se)*smoothstep(0.3,0.75,depth);
     float glint=smoothstep(0.45,0.85,fb(vec2(q.x*22.0,t*0.5)));
     col+=vec3(0.30,0.15,0.09)*surf*glint*0.8;                       // 깨진 수면 광택
-    // 앙금 — 형체를 잃은 것들이 바닥에 눌어붙어 빛을 먹는다.
-    // 벽에 붙지 않고 안쪽에만 고이며, 표면은 고르지 않다.
+    // 위의 바닥 — 항상 있다. 앙금이 쌓이면 이 어두운 바닥면이 올라온다.
+    // (쌓인 기둥만 골라 칠하면 두께와 무관하게 세로줄 전체가 검어져 상자가 된다 — 그 버그의 교훈)
     float sx=clamp((q.x+0.44)/0.88,0.,1.);
-    float sh=texture2D(uSed,vec2(sx,0.5)).r*0.075;
-    if(sh>0.0008){
-      float rough=(fb(vec2(q.x*18.0,7.3))-0.5)*0.011+(fb(vec2(q.x*70.0,3.1))-0.5)*0.0035;
-      float sedTop=0.405-sh+rough;
-      float inSed=smoothstep(sedTop-0.004,sedTop+0.008,q.y)*smoothstep(0.0,0.22,depth);
+    float sh=texture2D(uSed,vec2(sx,0.5)).r*0.09;
+    float rough=(fb(vec2(q.x*6.0,3.3))-0.5)*0.014
+               +(fb(vec2(q.x*21.0,7.3))-0.5)*0.006
+               +(fb(vec2(q.x*70.0,3.1))-0.5)*0.0024;
+    float sedTop=0.405-sh+rough;
+    float inSed=smoothstep(sedTop-0.004,sedTop+0.016,q.y)*smoothstep(0.0,0.16,depth);
+    if(inSed>0.001){
       float grain=0.40+0.60*fb(vec2(q.x*110.0,q.y*150.0));
-      col=mix(col,vec3(0.042,0.026,0.019)*grain,clamp(inSed,0.,1.));
-      col+=vec3(0.085,0.044,0.026)*inSed*pow(grain,4.0)*1.1;   // 알갱이 몇 개만 빛을 받는다
+      vec3 sedCol=vec3(0.040,0.026,0.019)*grain;
+      // 갓 쌓인 표면의 살얼음 같은 알갱이 — 쌓인 곳에서만 빛을 받는다
+      float crust=exp(-max(q.y-sedTop,0.0)*90.0)*smoothstep(0.002,0.012,sh);
+      sedCol+=vec3(0.085,0.044,0.026)*pow(grain,4.0)*crust*1.2;
+      col=mix(col,sedCol,inSed);
     }
     float wall=smoothstep(0.72,0.0,depth);
     float mottle=0.55+0.45*fb(vec2(q.x*14.0,q.y*10.0)+t*0.07);
