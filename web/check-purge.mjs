@@ -15,10 +15,10 @@ for(const [tag,qs] of [["아침","?day=0"],["저녁","?day=1&aged=1"]]){
     (function t(){window.__f++;requestAnimationFrame(t);})();
     setInterval(()=>{const r=canalDir<0; if(r&&!w)window.__p.push(performance.now()); w=r;
       window.__n.push(letters.length);},60);});
-  await pg.waitForTimeout(240000);
+  await pg.waitForTimeout(330000);
   const r=await pg.evaluate(()=>({p:window.__p,n:window.__n,f:window.__f,sed:+sedMass.toFixed(4)}));
   const g=[];for(let i=1;i<r.p.length;i++)g.push(Math.round((r.p[i]-r.p[i-1])/1000));
-  console.log(`${tag} 게움 ${r.p.length}회 · 간격(초) ${g.join(" ")} · 글자 평균 ${Math.round(r.n.reduce((a,b)=>a+b,0)/r.n.length)} 최대 ${Math.max(...r.n)} · ${(r.f/240).toFixed(0)}fps · 앙금 ${r.sed} ${errs.length?"에러 "+errs[0]:""}`);
+  console.log(`${tag} 게움 ${r.p.length}회 · 간격(초) ${g.join(" ")} · 글자 평균 ${Math.round(r.n.reduce((a,b)=>a+b,0)/r.n.length)} 최대 ${Math.max(...r.n)} · ${(r.f/330).toFixed(0)}fps · 앙금 ${r.sed} ${errs.length?"에러 "+errs[0]:""}`);
   await pg.screenshot({path:`out/purge-${tag}.png`}); await pg.close();
 }
 await b.close(); await new Promise(r=>srv.close(r)); process.exit(0);
