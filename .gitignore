@@ -2,3 +2,8 @@ node_modules/
 out/
 .env
 press/
+.DS_Store
+.claude/
+.vercel
+.vercel-link-backup/
+dist-web/.vercel/

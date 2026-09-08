@@ -3,7 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "spike1": "tsx src/spike1-choreography.ts"
+    "harvest": "tsx src/harvest.ts",
+    "curate": "tsx src/curate.ts",
+    "build": "node web/build.mjs",
+    "live": "tsx src/spike3-compositor.ts"
   },
   "dependencies": {
     "ghost-cursor": "^1.4.2",
@@ -15,5 +18,11 @@
     "@types/ws": "^8.18.1",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
-  }
+  },
+  "description": "구토 (Vomit) — 말을 먹는 몸. SCC Free Exhibition 2026 설치작: WebGL 위장, 낱글자 소화 물리, 절차 합성 구역질.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hebo1221/indigestion"
+  },
+  "license": "MIT"
 }

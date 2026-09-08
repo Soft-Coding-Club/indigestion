@@ -1,8 +1,8 @@
 {"dt":0,"m":{"t":"state","eaten":0,"toxin":0,"fatigue":0,"tokens":0,"ctxLimit":1048576,"fill":0,"pressure":0}}
-{"dt":1792,"m":{"t":"nav","url":"https://www.reddit.com/r/insaneparents/controversial/?solution=becf14e43973ddbebecf14e43973ddbe&js_challenge=1&token=7afd7253fec22262ff1c52b1703fe9ec0b58f5d134310fe6099414220b5e9a7a&jsc_orig_r=&t=week","title":"r/insaneparents"}}
+{"dt":1792,"m":{"t":"nav","url":"https://www.reddit.com/r/insaneparents/","title":"r/insaneparents"}}
 {"dt":1793,"m":{"t":"movement","name":"정독"}}
 {"dt":4803,"m":{"t":"state","eaten":0,"toxin":0,"fatigue":0,"tokens":0,"ctxLimit":1048576,"fill":0,"pressure":0}}
-{"dt":9205,"m":{"t":"nav","url":"https://www.reddit.com/r/insaneparents/comments/1vwzbum/insane_shit_my_father_said_im_certain_i_got_the/","title":"Insane shit my father said (I'm certain I got the names this time)"}}
+{"dt":9205,"m":{"t":"nav","url":"https://www.reddit.com/r/insaneparents/","title":"Insane shit my father said (I'm certain I got the names this time)"}}
 {"dt":9605,"m":{"t":"state","eaten":0,"toxin":0,"fatigue":0,"tokens":0,"ctxLimit":1048576,"fill":0,"pressure":0}}
 {"dt":12532,"m":{"t":"reading","box":{"x":379,"y":354.5,"width":529,"height":20},"text":"I need to ask wtf he is on about with that last one! ok so in very short summary. my dad was at the time looking into surrogacy for my sister to be born. as such, he used to hold over my head that my sister couldn't be born until I was,,, \"a good role model\" (read; a perfect child) What The Fuck Holy cow OP, I'm sorry"}}
 {"dt":14408,"m":{"t":"state","eaten":0,"toxin":0,"fatigue":0,"tokens":0,"ctxLimit":1048576,"fill":0,"pressure":0}}
@@ -60,7 +60,7 @@
 {"dt":221589,"m":{"t":"state","eaten":2,"toxin":1,"fatigue":0.6499999999999999,"tokens":4776,"ctxLimit":1048576,"fill":0.8683636363636363,"pressure":0.13513513513513511}}
 {"dt":222223,"m":{"t":"movement","name":"정독"}}
 {"dt":226391,"m":{"t":"state","eaten":2,"toxin":1,"fatigue":0.6499999999999999,"tokens":4776,"ctxLimit":1048576,"fill":0.8683636363636363,"pressure":0.13513513513513511}}
-{"dt":229470,"m":{"t":"nav","url":"https://www.reddit.com/r/insaneparents/comments/1vyxd8g/im_too_old_for_this/","title":"I'm too old for this"}}
+{"dt":229470,"m":{"t":"nav","url":"https://www.reddit.com/r/insaneparents/","title":"I'm too old for this"}}
 {"dt":231196,"m":{"t":"state","eaten":2,"toxin":1,"fatigue":0.6499999999999999,"tokens":4776,"ctxLimit":1048576,"fill":0.8683636363636363,"pressure":0.13513513513513511}}
 {"dt":232694,"m":{"t":"reading","box":{"x":379,"y":284.5,"width":529,"height":40},"text":"Ah. I see your mom is a \"earth expelling atmosphere\" flavor. Mine is a \"magnetic fields reversing/rapture\" flavor."}}
 {"dt":235999,"m":{"t":"state","eaten":2,"toxin":1,"fatigue":0.6499999999999999,"tokens":4776,"ctxLimit":1048576,"fill":0.8683636363636363,"pressure":0.13513513513513511}}
